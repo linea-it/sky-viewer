@@ -1,0 +1,57 @@
+name: Assign Issue to Project
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  assign_to_project:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up GitHub Script
+        id: assign
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const projectNumber = 39; 
+            const columnName = "Backlog"; 
+            
+            // Fetch the project
+            const { data: projects } = await github.projects.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo
+            });
+
+            const project = projects.find(p => p.name === "Software");
+
+            if (!project) {
+              core.setFailed("Project 'Software' not found");
+              return;
+            }
+
+            // Fetch the columns of the project
+            const { data: columns } = await github.projects.listColumns({
+              project_id: project.id
+            });
+
+            const column = columns.find(c => c.name === columnName);
+
+            if (!column) {
+              core.setFailed(`Column '${columnName}' not found`);
+              return;
+            }
+
+            // Create a project card for the issue
+            await github.projects.createCard({
+              column_id: column.id,
+              content_id: context.payload.issue.id,
+              content_type: 'Issue'
+            });
+
+            // Set the status and area for the issue (optional, requires labels)
+            await github.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              area: '🌠 Science Server'
+            });
