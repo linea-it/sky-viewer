@@ -13,22 +13,21 @@ jobs:
         uses: actions/github-script@v6
         with:
           script: |
-            const projectNumber = 39; 
+            const projectName = "Software"; 
             const columnName = "Backlog"; 
             
-            // Fetch the project
-            const { data: projects } = await github.projects.listForRepo({
+            // Fetch the repository projects
+            const projects = await github.rest.projects.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo
             });
 
-            const project = projects.find(p => p.name === "Software");
+            const project = projects.data.find(p => p.name === projectName);
 
             if (!project) {
-              core.setFailed("Project 'Software' not found");
+              core.setFailed(`Project '${projectName}' not found`);
               return;
             }
-
             // Fetch the columns of the project
             const { data: columns } = await github.projects.listColumns({
               project_id: project.id
@@ -52,6 +51,5 @@ jobs:
             await github.issues.addLabels({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
-              area: '🌠 Science Server'
+              issue_number: context.issue.number
             });
