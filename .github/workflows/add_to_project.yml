@@ -13,9 +13,9 @@ jobs:
         uses: actions/github-script@v6
         with:
           script: |
-            const projectName = "Software"; 
-            const columnName = "Backlog"; 
-            
+            const projectName = "Software";
+            const columnName = "Backlog";
+
             // Fetch the repository projects
             const projects = await github.rest.projects.listForRepo({
               owner: context.repo.owner,
