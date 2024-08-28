@@ -2,7 +2,8 @@
 {
     "name": "sky_viewer_dev",
     "dockerComposeFile": [
-        "../docker-compose.local.yml"
+        "../docker-compose.local.yml",
+        "docker-compose.yml"
     ],
     "init": true,
     "mounts": [
@@ -15,15 +16,22 @@
             "source": "~/.ssh",
             "target": "/home/dev-user/.ssh",
             "type": "bind"
+        },
+        {
+            "source": "..",
+            "target": "/workspaces",
+            "type": "bind"
         }
     ],
     // Tells devcontainer.json supporting services / tools whether they should run
     // /bin/sh -c "while sleep 1000; do :; done" when starting the container instead of the container’s default command
     "overrideCommand": false,
-    "service": "django",
+    "service": "vscode",
     // "remoteEnv": {"PATH": "/home/dev-user/.local/bin:${containerEnv:PATH}"},
-    "remoteUser": "dev-user",
-    "workspaceFolder": "/app",
+    // "remoteUser": "dev-user",
+    // The optional 'workspaceFolder' property is the path VS Code should open by default when
+    // connected. This is typically a file mount in .devcontainer/docker-compose.yml
+    "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
     // Set *default* container specific settings.json values on container create.
     "customizations": {
         "vscode": {

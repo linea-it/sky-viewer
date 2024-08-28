@@ -6,7 +6,7 @@ volumes:
 services:
   django: &django
     build:
-      context: .
+      context: ./
       dockerfile: ./compose/local/django/Dockerfile
     image: sky_viewer_local_django
     container_name: sky_viewer_local_django
@@ -15,7 +15,7 @@ services:
       - redis
       - mailpit
     volumes:
-      - .:/app:z
+      - ./backend:/app:z
     env_file:
       - ./.envs/.local/.django
       - ./.envs/.local/.postgres
@@ -44,10 +44,9 @@ services:
   redis:
     image: docker.io/redis:6
     container_name: sky_viewer_local_redis
-    
+
     volumes:
       - sky_viewer_local_redis_data:/data
-    
 
   celeryworker:
     <<: *django
