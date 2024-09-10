@@ -33,6 +33,11 @@
     // connected. This is typically a file mount in .devcontainer/docker-compose.yml
     "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
     // Set *default* container specific settings.json values on container create.
+    // Features to add to the dev container. More info: https://containers.dev/features.
+    "features": {
+        "ghcr.io/devcontainers/features/node:1": {},
+        "ghcr.io/devcontainers/features/github-cli:1": {}
+    },
     "customizations": {
         "vscode": {
             "settings": {
