@@ -11,6 +11,7 @@ import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 import { Inter } from "next/font/google";
 import CssBaseline from '@mui/material/CssBaseline';
+import Script from 'next/script';
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata = {
@@ -21,6 +22,15 @@ export const metadata = {
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
+
+      {/* <Script
+        src="https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js"
+        charset="utf-8"
+        strategy="afterInteractive"
+      // onLoad={() =>
+      //   console.log(`script loaded correctly, window.A has been created`)
+      // }
+      /> */}
       <body>
         <AppRouterCacheProvider options={{ enableCssLayer: true }}>
           <ThemeProvider theme={theme}>
