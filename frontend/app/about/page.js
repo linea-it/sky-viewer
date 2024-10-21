@@ -1,28 +1,29 @@
 import * as React from 'react';
 import Typography from '@mui/material/Typography';
-import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import NextLink from 'next/link';
+import Container from '@mui/material/Container';
+import Grid from '@mui/material/Grid2';
+import Breadcrumbs from '@mui/material/Breadcrumbs';
+import Link from '@mui/material/Link'
 
 export default function About() {
   return (
-    <Box
-      sx={{
-        my: 4,
-        display: 'flex',
-        flexDirection: 'column',
-        justifyContent: 'center',
-        alignItems: 'center',
-      }}
-    >
-      <Typography variant="h4" component="h1" sx={{ mb: 2 }}>
-        About Page
-      </Typography>
-      <Box sx={{ maxWidth: 'sm' }}>
-        <Button variant="contained" component={NextLink} href="/">
-          Go to the home page
-        </Button>
-      </Box>
-    </Box>
+    <Container>
+      <Grid container spacing={8}>
+        <Grid item xs={12}>
+          <Breadcrumbs aria-label="breadcrumb" sx={{ mt: 2 }}>
+            <Link color="inherit" href="/">
+              Home
+            </Link>
+            <Typography color="textPrimary">About</Typography>
+          </Breadcrumbs>
+          <Typography variant="h6" sx={{ mb: 2 }}>
+            About
+          </Typography>
+          <Typography>
+            About page is comming ...
+          </Typography>
+        </Grid>
+      </Grid>
+    </Container>
   );
 }

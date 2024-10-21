@@ -1,28 +1,43 @@
 import * as React from 'react';
 import AppBar from '@mui/material/AppBar';
 import Toolbar from '@mui/material/Toolbar';
-import Typography from '@mui/material/Typography';
-import Button from '@mui/material/Button';
-import IconButton from '@mui/material/IconButton';
-import MenuIcon from '@mui/icons-material/Menu';
+import ListItem from '@mui/material/ListItem';
+import List from '@mui/material/List';
+import Link from '@mui/material/Link';
 
 export default function Header() {
+
+  const menus = [
+    {
+      description: 'HOME',
+      href: '/'
+    },
+    {
+      description: 'ABOUT',
+      href: '/about'
+    },
+    {
+      description: 'TUTORIALS',
+      href: '/tutorials'
+    },
+    {
+      description: 'CONTACT',
+      href: '/contact'
+    }
+  ];
+
   return (
     <AppBar position="static">
-      <Toolbar>
-        <IconButton
-          size="large"
-          edge="start"
-          color="inherit"
-          aria-label="menu"
-          sx={{ mr: 2 }}
-        >
-          <MenuIcon />
-        </IconButton>
-        <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-          News
-        </Typography>
-        <Button color="inherit">Login</Button>
+      <Toolbar sx={{ backgroundColor: '#212121' }}>
+        <List sx={{ display: 'flex' }}>
+          {menus.map(menu => (
+            <ListItem key={menu.href} sx={{ width: 'auto' }}>
+              <Link href={menu.href} color="inherit" underline="none">
+                {menu.description}
+              </Link>
+            </ListItem>
+          ))}
+        </List>
       </Toolbar>
     </AppBar>
   );
