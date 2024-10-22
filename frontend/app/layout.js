@@ -43,7 +43,7 @@ export default function RootLayout({ children }) {
                 paddingRight: 0,
                 display: 'flex',
                 // TODO: tamanho minimo do container principal deve ser
-                // Total disponivel 100vg - 64px do header - xx px do footer
+                // Total disponivel 100vg - 64px do header - 495.56px do footer (porém está impactando no aladin da home, que ao passar esse valor, ele comprime)
                 minHeight: 'calc(100vh - 64px - 32px)'
               }}>
               {children}
