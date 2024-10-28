@@ -8,7 +8,7 @@ import Link from '@mui/material/Link'
 export default function Tutorials() {
   return (
     <Container>
-      <Grid container spacing={8}>
+      <Grid container spacing={2}>
         <Grid item xs={12}>
           <Breadcrumbs aria-label="breadcrumb" sx={{ mt: 2 }}>
             <Link color="inherit" href="/">
