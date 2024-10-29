@@ -5,7 +5,7 @@ import Grid from '@mui/material/Grid2';
 import Breadcrumbs from '@mui/material/Breadcrumbs';
 import Link from '@mui/material/Link'
 
-export default function Contact() {
+export default function Tutorials() {
   return (
     <Container>
       <Grid container spacing={2}>
@@ -14,13 +14,13 @@ export default function Contact() {
             <Link color="inherit" href="/">
               Home
             </Link>
-            <Typography color="textPrimary">Contact</Typography>
+            <Typography color="textPrimary">Tutorials</Typography>
           </Breadcrumbs>
           <Typography variant="h6" sx={{ mb: 2 }}>
-            Contact
+            Tutorials
           </Typography>
           <Typography>
-            Contact page is comming ...
+            Tutorials page is comming ...
           </Typography>
         </Grid>
       </Grid>
