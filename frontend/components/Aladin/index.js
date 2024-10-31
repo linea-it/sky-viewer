@@ -1,8 +1,8 @@
 'use client';
-import React, { useEffect } from 'react'
+import React from 'react'
 import Box from '@mui/material/Box';
-import Typography from '@mui/material/Typography';
 import A from 'aladin-lite'
+// import { v4 } from "uuid";
 
 // export default function Aladin() {
 
@@ -66,33 +66,59 @@ export default class Aladin extends React.Component {
   // https://aladin.cds.unistra.fr/AladinLite/doc/API/examples/
 
   constructor(props) {
-    console.log("Aladin - constructor")
+    // console.log("Aladin - constructor")
     super(props)
 
     // Cria um ID unico para div que vai receber o aladin
-    // this.id = `aladin-container-${uuidv4()}`
+    // this.id = `aladin-container-${v4()}`
     this.id = `aladin-container`
 
-    // // Instancia do Aladin linkado com a div
-    // this.aladin = undefined
-
-    // // Verificar se a lib Aladin esta disponivel
-    // this.libA = A
   }
 
   componentDidMount() {
     A.init.then(() => {
-      this.aladin = A.aladin(`#${this.id}`, {
-        survey: 'P/allWISE/color', // set initial image survey
-        // survey: 'P/DSS2/color', // set initial image survey
-        projection: 'SIN', // set a projection
-        fov: 0.12, // initial field of view in degrees
-        // target: 'NGC 2175', // initial target
-        cooFrame: 'ICRS', // set galactic frame reticleColor: '#ff89ff', // change reticle color
-        showReticle: false,
-        showCooGrid: false,
-        fullScreen: false
-      })
+      // this.aladin = A.aladin(`#${this.id}`, {
+      //   survey: 'P/allWISE/color', // set initial image survey
+      //   // survey: 'P/DSS2/color', // set initial image survey
+      //   projection: 'SIN', // set a projection
+      //   fov: 0.12, // initial field of view in degrees
+      //   // target: 'NGC 2175', // initial target
+      //   cooFrame: 'ICRS', // set galactic frame reticleColor: '#ff89ff', // change reticle color
+      //   showReticle: false,
+      //   showCooGrid: false,
+      //   fullScreen: false
+      // })
+
+      // this.aladin = A.aladin(`#${this.id}`, {
+      //   // projection: 'SIN', // set a projection
+      //   // fov: 0.12, // initial field of view in degrees
+      //   // cooFrame: 'ICRS', // set galactic frame reticleColor: '#ff89ff', // change reticle color
+      //   showReticle: false,
+      //   showCooGrid: false,
+      //   fullScreen: false
+      // })
+
+      this.aladin = A.aladin(`#${this.id}`, {})
+
+
+      // https://aladin.cds.unistra.fr/AladinLite/doc/API/#image-layers
+      // https://aladin.cds.unistra.fr/AladinLite/doc/API/
+      this.aladin.setImageSurvey(this.aladin.createImageSurvey(
+        "DES_DR2_IRG_LIneA",
+        "DES DR2 IRG at LIneA",
+        "https://scienceserver-dev.linea.org.br/secondary/images/coadd/hips_rgb/",
+        "equatorial",
+      ), { imgFormat: 'hips' })
+
+      {/* aladin.setImageSurvey(
+        aladin.createImageSurvey(
+          "DSS blue band",
+          "Color DSS blue HiPS",
+          "http://alasky.cds.unistra.fr/DSS/DSS2-blue-XJ-S/",
+          "equatorial",
+          9,
+          {imgFormat: 'fits'})
+        ); // setting a custom HiPS */}
 
       //   // // Cria um catalogo com um unico source
       //   // this.drawCatalog()

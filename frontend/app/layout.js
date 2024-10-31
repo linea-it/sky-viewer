@@ -21,15 +21,6 @@ export const metadata = {
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-
-      {/* <Script
-        src="https://aladin.cds.unistra.fr/AladinLite/api/v3/latest/aladin.js"
-        charset="utf-8"
-        strategy="afterInteractive"
-      // onLoad={() =>
-      //   console.log(`script loaded correctly, window.A has been created`)
-      // }
-      /> */}
       <body>
         <AppRouterCacheProvider options={{ enableCssLayer: true }}>
           <ThemeProvider theme={theme}>
@@ -41,9 +32,6 @@ export default function RootLayout({ children }) {
                 paddingLeft: 0,
                 paddingRight: 0,
                 display: 'flex',
-                // TODO: tamanho minimo do container principal deve ser
-                // Total disponivel 100vg - 64px do header - 495.56px do footer (porém está impactando no aladin da home, que ao passar esse valor, ele comprime)
-                // minHeight: 'calc(100vh - 64px - 32px)'
               }}>
               {children}
             </Box>
