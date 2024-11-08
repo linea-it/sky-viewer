@@ -17,4 +17,11 @@ WORKDIR /app
 RUN yarn -v
 RUN yarn --non-interactive --ignore-optional --network-timeout 500000
 RUN yarn run build
-CMD ["yarn", "start"]
+# CMD ["yarn", "start"]
+
+FROM docker.io/nginx:1.17.8-alpine
+
+# Add Extjs Builded apps to image (sky, Target, Explorer, User Query)
+COPY --from=base /app/out /var/www/skyviewer
+
+COPY ./compose/production/react/default.conf /etc/nginx/conf.d/default.conf

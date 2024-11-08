@@ -14,10 +14,10 @@ export default function Header() {
   const [drawerOpen, setDrawerOpen] = React.useState(false);
 
   const menus = [
-    { description: 'HOME', href: '/' },
-    { description: 'ABOUT', href: '/about' },
-    { description: 'TUTORIALS', href: '/tutorials' },
-    { description: 'CONTACT', href: '/contact' },
+    { description: 'HOME', href: '/skyviewer/' },
+    { description: 'ABOUT', href: '/skyviewer/about/' },
+    { description: 'TUTORIALS', href: '/skyviewer/tutorials/' },
+    { description: 'CONTACT', href: '/skyviewer/contact/' },
   ];
 
   const toggleDrawer = (open) => () => {

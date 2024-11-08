@@ -37,7 +37,7 @@ function Footer() {
                   rel="noreferrer"
                 >
                   <Image
-                    src="/linea-logo.png"
+                    src="/skyviewer/linea-logo.png"
                     alt="LIneA logo"
                     width={145}
                     height={120}
@@ -107,23 +107,23 @@ function Footer() {
                 <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mt: 2 }}>
                   {[{
                     href: "https://www.linea.org.br/inct#inct",
-                    src: "/inct-logo.png",
+                    src: "/skyviewer/inct-logo.png",
                     alt: "INCT"
                   }, {
                     href: "https://www.gov.br/capes/pt-br",
-                    src: "/capes-logo.png",
+                    src: "/skyviewer/capes-logo.png",
                     alt: "CAPES"
                   }, {
                     href: "https://www.gov.br/cnpq/pt-br",
-                    src: "/cnpq-logo.png",
+                    src: "/skyviewer/cnpq-logo.png",
                     alt: "CNPq"
                   }, {
                     href: "https://www.faperj.br",
-                    src: "/faperj-logo.png",
+                    src: "/skyviewer/faperj-logo.png",
                     alt: "FAPERJ"
                   }, {
                     href: "http://www.finep.gov.br",
-                    src: "/finep-logo.png",
+                    src: "/skyviewer/finep-logo.png",
                     alt: "FINEP"
                   }].map(({ href, src, alt }) => (
                     <Box key={alt} sx={{ margin: '0 8px' }}>

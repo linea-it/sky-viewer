@@ -110,6 +110,20 @@ export default class Aladin extends React.Component {
         "equatorial",
       ), { imgFormat: 'hips' })
 
+
+      // DES DR2 Catalog HIPScat/HATS
+      // https://aladin.cds.unistra.fr/AladinLite/doc/API/examples/catalog-hips-filter/
+      // https://hipscat.cds.unistra.fr/HiPSCatService/I/345/gaia2/
+      // https://aladin.cds.unistra.fr/AladinLite/doc/tutorials/interactive-finding-chart/
+      var hips = A.catalogHiPS(
+        'https://scienceserver-dev.linea.org.br/secondary/catalogs/hats',
+        {
+          onClick: 'showTable',
+          color: 'orange',
+          name: 'DES DR2',
+        });
+      this.aladin.addCatalog(hips);
+
       {/* aladin.setImageSurvey(
         aladin.createImageSurvey(
           "DSS blue band",

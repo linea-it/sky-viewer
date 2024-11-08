@@ -35,7 +35,7 @@ export default function RootLayout({ children }) {
               }}>
               {children}
             </Box>
-            <Footer />
+            {/* <Footer /> */}
           </ThemeProvider>
         </AppRouterCacheProvider>
       </body>

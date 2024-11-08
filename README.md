@@ -2,6 +2,12 @@
 
 LIneA Sky Viewer
 
+## Build Manual do frontend para utilizar no -dev
+```bash
+docker build --no-cache -f compose/production/react/Dockerfile -t linea/dri:sky_viewer_teste2 .
+```
+
+
 [![Built with Cookiecutter Django](https://img.shields.io/badge/built%20with-Cookiecutter%20Django-ff69b4.svg?logo=cookiecutter)](https://github.com/cookiecutter/cookiecutter-django/)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 

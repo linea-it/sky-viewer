@@ -22,7 +22,7 @@ services:
     command: /start
 
   frontend:
-    image: node:22.7.0-bookworm-slim
+    image: node:22.11.0-bookworm-slim
     container_name: sky_viewer_local_react
     user: 1000:1000
     working_dir: /app
