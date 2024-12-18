@@ -8,13 +8,12 @@ import { ThemeProvider } from '@mui/material/styles';
 import Box from "@mui/material/Box";
 import theme from './theme';
 import Header from "@/components/Header";
-import Footer from "@/components/Footer";
 import { Inter } from "next/font/google";
 import CssBaseline from '@mui/material/CssBaseline';
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata = {
-  title: "Sky Viewer",
+  title: "SKY VIEWER",
   description: "Sky Viewer by LIneA",
 };
 
@@ -35,7 +34,6 @@ export default function RootLayout({ children }) {
               }}>
               {children}
             </Box>
-            {/* <Footer /> */}
           </ThemeProvider>
         </AppRouterCacheProvider>
       </body>
