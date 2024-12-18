@@ -4,7 +4,7 @@ import AppBar from '@mui/material/AppBar';
 import Toolbar from '@mui/material/Toolbar';
 import ListItem from '@mui/material/ListItem';
 import List from '@mui/material/List';
-import Link from '@mui/material/Link';
+import Link from 'next/link'
 import IconButton from '@mui/material/IconButton';
 import MenuIcon from '@mui/icons-material/Menu';
 import Drawer from '@mui/material/Drawer';
@@ -14,10 +14,10 @@ export default function Header() {
   const [drawerOpen, setDrawerOpen] = React.useState(false);
 
   const menus = [
-    { description: 'HOME', href: '/skyviewer/' },
-    { description: 'ABOUT', href: '/skyviewer/about/' },
-    { description: 'TUTORIALS', href: '/skyviewer/tutorials/' },
-    { description: 'CONTACT', href: '/skyviewer/contact/' },
+    { description: 'HOME', href: '/' },
+    { description: 'ABOUT', href: '/about/' },
+    { description: 'TUTORIALS', href: '/tutorials/' },
+    { description: 'CONTACT', href: '/contact/' },
   ];
 
   const toggleDrawer = (open) => () => {

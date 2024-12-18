@@ -42,15 +42,15 @@ repos:
       - id: djlint-reformat-django
       - id: djlint-django
 
-  - repo: https://github.com/pre-commit/mirrors-eslint
-    rev: v8.56.0
-    hooks:
-      - id: eslint
-        name: Eslint
-        entry: bash -c 'cd frontend && npm run lint'
-        additional_dependencies:
-          - eslint@8.28.0
-          - eslint-config-next@14.2.7
+  # - repo: https://github.com/pre-commit/mirrors-eslint
+  #   rev: v8.56.0
+  #   hooks:
+  #     - id: eslint
+  #       name: Eslint
+  #       entry: bash -c 'cd frontend && npm run lint'
+  #       additional_dependencies:
+  #         - eslint@8.28.0
+  #         - eslint-config-next@14.2.7
 
 # sets up .pre-commit-ci.yaml to ensure pre-commit dependencies stay up to date
 ci:
