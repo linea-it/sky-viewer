@@ -98,8 +98,11 @@ export default class Aladin extends React.Component {
       //   fullScreen: false
       // })
 
-      this.aladin = A.aladin(`#${this.id}`, {})
-
+      this.aladin = A.aladin(`#${this.id}`, {
+        // target: "239.306940 -47.5654074"
+        target: "04 08 35.53 -37 06 27.6",
+        fov: 0.5,
+      })
 
       // https://aladin.cds.unistra.fr/AladinLite/doc/API/#image-layers
       // https://aladin.cds.unistra.fr/AladinLite/doc/API/
@@ -108,21 +111,28 @@ export default class Aladin extends React.Component {
         "DES DR2 IRG at LIneA",
         "https://scienceserver-dev.linea.org.br/secondary/images/coadd/hips_rgb/",
         "equatorial",
+
       ), { imgFormat: 'hips' })
 
+      this.aladin.setImageSurvey(this.aladin.createImageSurvey(
+        "LSST_DP02_IRG_LIneA",
+        "LSST DP0.2 IRG at LIneA",
+        "https://scienceserver-dev.linea.org.br/data/releases/lsst/dp02/hips/",
+        "equatorial",
+      ), { imgFormat: 'hips' })
 
       // DES DR2 Catalog HIPScat/HATS
       // https://aladin.cds.unistra.fr/AladinLite/doc/API/examples/catalog-hips-filter/
       // https://hipscat.cds.unistra.fr/HiPSCatService/I/345/gaia2/
       // https://aladin.cds.unistra.fr/AladinLite/doc/tutorials/interactive-finding-chart/
-      var hips = A.catalogHiPS(
-        'https://scienceserver-dev.linea.org.br/secondary/catalogs/hats',
-        {
-          onClick: 'showTable',
-          color: 'orange',
-          name: 'DES DR2',
-        });
-      this.aladin.addCatalog(hips);
+      // var hips = A.catalogHiPS(
+      //   'https://scienceserver-dev.linea.org.br/secondary/catalogs/hats',
+      //   {
+      //     onClick: 'showTable',
+      //     color: 'orange',
+      //     name: 'DES DR2',
+      //   });
+      // this.aladin.addCatalog(hips);
 
       {/* aladin.setImageSurvey(
         aladin.createImageSurvey(
