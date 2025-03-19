@@ -60,6 +60,10 @@ export default class Aladin extends React.Component {
   // https://blog.logrocket.com/complete-guide-react-refs/
   // https://legacy.reactjs.org/docs/hooks-effect.html
   //
+
+  // Aladin Lite Repository
+  // https://github.com/cds-astro/aladin-lite/tree/master#
+
   // Complete List with all Options for Aladin
   // https://aladin.cds.unistra.fr/AladinLite/doc/API/
   // Lista de Exemplos:
@@ -125,14 +129,15 @@ export default class Aladin extends React.Component {
       // https://aladin.cds.unistra.fr/AladinLite/doc/API/examples/catalog-hips-filter/
       // https://hipscat.cds.unistra.fr/HiPSCatService/I/345/gaia2/
       // https://aladin.cds.unistra.fr/AladinLite/doc/tutorials/interactive-finding-chart/
-      // var hips = A.catalogHiPS(
-      //   'https://scienceserver-dev.linea.org.br/secondary/catalogs/hats',
-      //   {
-      //     onClick: 'showTable',
-      //     color: 'orange',
-      //     name: 'DES DR2',
-      //   });
-      // this.aladin.addCatalog(hips);
+      var hips = A.catalogHiPS(
+        'https://scienceserver-dev.linea.org.br/data/releases/dr2/catalogs/',
+        {
+          onClick: 'showTable',
+          color: '#33ff42',
+          name: 'DES DR2',
+        });
+      this.aladin.addCatalog(hips);
+      // console.log(this.aladin)
 
       {/* aladin.setImageSurvey(
         aladin.createImageSurvey(
