@@ -16,7 +16,6 @@ export default function Header() {
   const menus = [
     { description: 'HOME', href: '/' },
     { description: 'ABOUT', href: '/about/' },
-    { description: 'TUTORIALS', href: '/tutorials/' },
     { description: 'CONTACT', href: '/contact/' },
   ];
 
