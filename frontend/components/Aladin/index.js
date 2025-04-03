@@ -108,6 +108,13 @@ export default class Aladin extends React.Component {
         fov: 0.5,
       })
 
+      this.aladin.setImageSurvey(this.aladin.createImageSurvey(
+        "LSST_DP02_IRG_LIneA",
+        "LSST DP0.2 IRG at LIneA",
+        "https://scienceserver-dev.linea.org.br/data/releases/lsst/dp02/hips/",
+        "equatorial",
+      ), { imgFormat: 'hips' })
+
       // https://aladin.cds.unistra.fr/AladinLite/doc/API/#image-layers
       // https://aladin.cds.unistra.fr/AladinLite/doc/API/
       this.aladin.setImageSurvey(this.aladin.createImageSurvey(
@@ -116,13 +123,6 @@ export default class Aladin extends React.Component {
         "https://scienceserver-dev.linea.org.br/secondary/images/coadd/hips_rgb/",
         "equatorial",
 
-      ), { imgFormat: 'hips' })
-
-      this.aladin.setImageSurvey(this.aladin.createImageSurvey(
-        "LSST_DP02_IRG_LIneA",
-        "LSST DP0.2 IRG at LIneA",
-        "https://scienceserver-dev.linea.org.br/data/releases/lsst/dp02/hips/",
-        "equatorial",
       ), { imgFormat: 'hips' })
 
       // DES DR2 Catalog HIPScat/HATS
