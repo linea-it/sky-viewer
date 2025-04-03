@@ -4,7 +4,7 @@ LIneA Sky Viewer
 
 ## Build Manual do frontend para utilizar no -dev
 ```bash
-docker build --no-cache -f compose/frontend/react/Dockerfile -t linea/dri:sky_viewer_teste2 .
+docker build -f compose/production/frontend/Dockerfile -t linea/skyviewer:$(git describe --always) .
 ```
 
 
