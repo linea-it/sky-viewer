@@ -122,7 +122,6 @@ export default class Aladin extends React.Component {
         "DES DR2 IRG at LIneA",
         "https://scienceserver-dev.linea.org.br/secondary/images/coadd/hips_rgb/",
         "equatorial",
-
       ), { imgFormat: 'hips' })
 
       // DES DR2 Catalog HIPScat/HATS
@@ -138,6 +137,15 @@ export default class Aladin extends React.Component {
         });
       this.aladin.addCatalog(hips);
       // console.log(this.aladin)
+
+      // var hips = A.catalogHiPS(
+      //   'https://scienceserver-dev.linea.org.br/data/releases/lsst/dp02/catalogs/',
+      //   {
+      //     onClick: 'showTable',
+      //     color: '#8e44ad',
+      //     name: 'LSST DP0.2',
+      //   });
+      // this.aladin.addCatalog(hips);
 
       {/* aladin.setImageSurvey(
         aladin.createImageSurvey(
