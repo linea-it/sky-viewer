@@ -5,6 +5,7 @@ import Toolbar from '@mui/material/Toolbar';
 import ListItem from '@mui/material/ListItem';
 import List from '@mui/material/List';
 import Link from 'next/link'
+import Image from 'next/image'
 import IconButton from '@mui/material/IconButton';
 import MenuIcon from '@mui/icons-material/Menu';
 import Drawer from '@mui/material/Drawer';
@@ -13,10 +14,35 @@ import ListItemText from '@mui/material/ListItemText';
 export default function Header() {
   const [drawerOpen, setDrawerOpen] = React.useState(false);
 
-  const menus = [
-    { description: 'HOME', href: '/' },
-    { description: 'ABOUT', href: '/about/' },
-    { description: 'CONTACT', href: '/contact/' },
+  const navItems = [
+    {
+      description: 'Home',
+      href: '/'
+    },
+    {
+      description: 'About',
+      href: '/about/'
+    },
+    {
+      description: 'Documentation',
+      href: 'https://docs.linea.org.br/'
+    },
+    {
+      description: 'Monitoring',
+      href: 'https://www.linea.org.br/grafana/'
+    },
+    {
+      description: 'Contact',
+      href: 'https://scienceplatform-dev.linea.org.br/lsp/contact'
+    },
+    {
+      description: 'LSP',
+      href: 'https://scienceplatform-dev.linea.org.br/lsp'
+    },
+    {
+      description: 'IDAC',
+      href: 'https://scienceplatform-dev.linea.org.br/idac'
+    }
   ];
 
   const toggleDrawer = (open) => () => {
@@ -25,10 +51,10 @@ export default function Header() {
 
   const drawerList = () => (
     <List>
-      {menus.map(menu => (
-        <ListItem button key={menu.href}>
-          <Link href={menu.href} color="inherit" underline="none">
-            <ListItemText primary={menu.description} />
+      {navItems.map(item => (
+        <ListItem button key={item.href}>
+          <Link href={item.href} color="inherit" underline="none">
+            <ListItemText primary={item.description} />
           </Link>
         </ListItem>
       ))}
@@ -36,30 +62,40 @@ export default function Header() {
   );
 
   return (
-    <AppBar position="static">
-      <Toolbar sx={{ backgroundColor: '#212121' }}>
-        <IconButton
-          edge="start"
-          color="inherit"
-          aria-label="menu"
-          onClick={toggleDrawer(true)}
-          sx={{ display: { xs: 'block', md: 'none' } }}
-        >
-          <MenuIcon />
-        </IconButton>
-        <List sx={{ display: { xs: 'none', md: 'flex' } }}>
-          {menus.map(menu => (
-            <ListItem key={menu.href} sx={{ width: 'auto' }}>
-              <Link href={menu.href} color="inherit" underline="none">
-                {menu.description}
-              </Link>
-            </ListItem>
-          ))}
-        </List>
-      </Toolbar>
-      <Drawer anchor="left" open={drawerOpen} onClose={toggleDrawer(false)}>
-        {drawerList()}
-      </Drawer>
-    </AppBar>
+    <React.Fragment>
+      <AppBar position="fixed" sx={{
+        background: '-webkit-linear-gradient(120deg,  #31297f, #0989cb)',
+      }}>
+        <Toolbar>
+          <Link href="/">
+            <Image src="/linea-symbol.svg" alt="LIneA" width={52} height={40} />
+          </Link>
+          <IconButton
+            edge="start"
+            color="inherit"
+            aria-label="menu"
+            onClick={toggleDrawer(true)}
+            sx={{ display: { xs: 'block', md: 'none' } }}
+          >
+            <MenuIcon />
+          </IconButton>
+          <List sx={{ display: { xs: 'none', md: 'flex' } }}>
+            {navItems.map(item => (
+              <ListItem key={item.href} sx={{ width: 'auto' }}>
+                <Link href={item.href} color="inherit" underline="none">
+                  {item.description}
+                </Link>
+              </ListItem>
+            ))}
+          </List>
+        </Toolbar>
+        <Drawer anchor="left" open={drawerOpen} onClose={toggleDrawer(false)}>
+          {drawerList()}
+        </Drawer>
+      </AppBar >
+      {/* https://mui.com/material-ui/react-app-bar/#fixed-placement */}
+      {/* The toolbar is used to create space for the AppBar */}
+      <Toolbar />
+    </React.Fragment>
   );
 }
