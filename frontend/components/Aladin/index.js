@@ -108,19 +108,22 @@ export default class Aladin extends React.Component {
         fov: 0.5,
       })
 
+      // LSST DP0.2 IRG HIPS IMAGE
       this.aladin.setImageSurvey(this.aladin.createImageSurvey(
         "LSST_DP02_IRG_LIneA",
         "LSST DP0.2 IRG at LIneA",
-        "https://scienceserver-dev.linea.org.br/data/releases/lsst/dp02/hips/",
+        "https://datasets.linea.org.br/data/releases/lsst/dp02/images/hips/",
         "equatorial",
       ), { imgFormat: 'hips' })
 
+
+      // DES DR2 IRG HIPS IMAGE
       // https://aladin.cds.unistra.fr/AladinLite/doc/API/#image-layers
       // https://aladin.cds.unistra.fr/AladinLite/doc/API/
       this.aladin.setImageSurvey(this.aladin.createImageSurvey(
         "DES_DR2_IRG_LIneA",
         "DES DR2 IRG at LIneA",
-        "https://scienceserver-dev.linea.org.br/secondary/images/coadd/hips_rgb/",
+        "https://datasets.linea.org.br/data/releases/des/dr2/images/hips/",
         "equatorial",
       ), { imgFormat: 'hips' })
 
@@ -129,7 +132,7 @@ export default class Aladin extends React.Component {
       // https://hipscat.cds.unistra.fr/HiPSCatService/I/345/gaia2/
       // https://aladin.cds.unistra.fr/AladinLite/doc/tutorials/interactive-finding-chart/
       var hips = A.catalogHiPS(
-        'https://scienceserver-dev.linea.org.br/data/releases/dr2/catalogs/',
+        'https://datasets.linea.org.br/data/releases/des/dr2/catalogs/hips/',
         {
           onClick: 'showTable',
           color: '#33ff42',

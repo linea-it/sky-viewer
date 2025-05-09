@@ -9,7 +9,7 @@ services:
       context: ./
       dockerfile: ./compose/local/django/Dockerfile
     image: sky_viewer_local_django
-    container_name: sky_viewer_local_backend
+    # container_name: sky_viewer_local_backend
     depends_on:
       - postgres
       - redis
@@ -23,7 +23,7 @@ services:
 
   frontend:
     image: node:22.11.0-bookworm-slim
-    container_name: sky_viewer_local_react
+    # container_name: sky_viewer_local_react
     user: 1000:1000
     working_dir: /app
     volumes:
@@ -35,7 +35,7 @@ services:
       context: .
       dockerfile: ./compose/production/postgres/Dockerfile
     image: sky_viewer_production_postgres
-    container_name: sky_viewer_local_postgres
+    # container_name: sky_viewer_local_postgres
     volumes:
       - sky_viewer_local_postgres_data:/var/lib/postgresql/data
       - sky_viewer_local_postgres_data_backups:/backups
@@ -55,20 +55,19 @@ services:
       # - flower
       # - mailpit
 
-  # mailpit:
-  #   image: docker.io/axllent/mailpit:latest
-  #   container_name: sky_viewer_local_mailpit
-  #   environment:
-  #     - MP_WEBROOT=/mailpit/
-  #   ports:
-  #     - "8025:8025"
+      # mailpit:
+      #   image: docker.io/axllent/mailpit:latest
+      #   container_name: sky_viewer_local_mailpit
+      #   environment:
+      #     - MP_WEBROOT=/mailpit/
+      #   ports:
+      #     - "8025:8025"
 
   redis:
     image: docker.io/redis:6
-    container_name: sky_viewer_local_redis
+    # container_name: sky_viewer_local_redis
     volumes:
       - sky_viewer_local_redis_data:/data
-
   # celeryworker:
   #   <<: *backend
   #   image: sky_viewer_local_celeryworker
