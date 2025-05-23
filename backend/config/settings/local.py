@@ -14,7 +14,10 @@ SECRET_KEY = env(
     default="nFK0g6mvH2IjeawVrOykaac3UD9hRLJoWzmlnWiDlJM1joaFM4KUQWiGZPad7pRc",
 )
 # https://docs.djangoproject.com/en/dev/ref/settings/#allowed-hosts
-ALLOWED_HOSTS = ["localhost", "0.0.0.0", "127.0.0.1", "srvapi"]  # noqa: S104
+ALLOWED_HOSTS = ["localhost", "0.0.0.0", "127.0.0.1", "*"]  # noqa: S104
+
+# Complete URL of the production server with protocol and port
+BASE_HOST = env("BASE_HOST", default="http://localhost")
 
 # CACHES
 # ------------------------------------------------------------------------------

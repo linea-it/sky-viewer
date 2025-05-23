@@ -2,13 +2,31 @@
 # ------------------------------------------------------------------------------
 USE_DOCKER=yes
 IPYTHONDIR=/app/.ipython
+
+DJANGO_DEBUG=True
+DATABASE_URL=postgres://debug:debug@postgres:5432/sky_viewer
+
+# UWSGI
+DJANGO_UWSGI_WORKER_PROCESSES=4
+DJANGO_UWSGI_WORKER_THREADS=2
+
 # Redis
 # ------------------------------------------------------------------------------
 REDIS_URL=redis://redis:6379/0
 
-# Celery
+#Celery
 # ------------------------------------------------------------------------------
-
+CELERY_BROKER_URL=$REDIS_URL
 # Flower
 CELERY_FLOWER_USER=debug
 CELERY_FLOWER_PASSWORD=debug
+
+
+# ------------------------------------------------------------------------------
+# LIneA
+# ------------------------------------------------------------------------------
+ENVIRONMENT_NAME=development
+BASE_HOST=http://localhost
+
+# Url de login utilizada pelo frontend
+LINEA_LOGIN_URL=/admin/login/?next=/
