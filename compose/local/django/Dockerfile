@@ -1,5 +1,5 @@
 # define an alias for the specific python version used in this file.
-FROM docker.io/python:3.12.5-slim-bookworm AS python
+FROM docker.io/python:3.12.8-slim-bookworm AS python
 
 # Python build stage
 FROM python AS python-build-stage
@@ -49,6 +49,7 @@ RUN groupadd --gid 1000 dev-user \
 RUN apt-get update && apt-get install --no-install-recommends -y \
   # psycopg dependencies
   libpq-dev \
+  wait-for-it \
   # Translations dependencies
   gettext \
   # cleaning up unused files
