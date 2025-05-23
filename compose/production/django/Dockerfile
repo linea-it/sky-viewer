@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install --no-install-recommends -y \
   libpq-dev
 
 # Requirements are installed here to ensure they will be cached.
-COPY ./requirements .
+COPY ./backend/requirements .
 
 # Create Python Dependency and Sub-Dependency Wheels.
 RUN pip wheel --wheel-dir /usr/src/app/wheels  \
@@ -44,6 +44,21 @@ RUN apt-get update && apt-get install --no-install-recommends -y \
   libpq-dev \
   # Translations dependencies
   gettext \
+  # SAML dependencies
+  libaio-dev \
+  libsasl2-dev \
+  libldap2-dev \
+  libssl-dev \
+  xmlsec1 \
+  # other dependencies
+  unzip \
+  git \
+  zsh \
+  wget \
+  curl \
+  vim \
+  # entrypoint
+  wait-for-it \
   # cleaning up unused files
   && apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false \
   && rm -rf /var/lib/apt/lists/*
@@ -81,7 +96,7 @@ RUN chmod +x /start-flower
 
 
 # copy application code to WORKDIR
-COPY --chown=django:django . ${APP_HOME}
+COPY --chown=django:django ./backend ${APP_HOME}
 
 # make django owner of the WORKDIR directory as well.
 RUN chown -R django:django ${APP_HOME}
