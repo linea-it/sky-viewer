@@ -2,9 +2,11 @@
 
 LIneA Sky Viewer
 
-## Build Manual do frontend para utilizar no -dev
+## Build Manual do frontend e backend para utilizar no -dev
 ```bash
-docker build -f compose/production/frontend/Dockerfile -t linea/skyviewer:$(git describe --always) .
+docker build -f compose/production/frontend/Dockerfile -t linea/skyviewer:frontend$(git describe --always) .
+
+docker build -f compose/production/django/Dockerfile -t linea/skyviewer:backend_$(git describe --always) .
 ```
 
 
