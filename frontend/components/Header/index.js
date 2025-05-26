@@ -23,31 +23,38 @@ export default function Header() {
   const navItems = [
     {
       description: 'Home',
-      href: '/'
+      href: '/',
+      target: '_self',
     },
     {
       description: 'About',
-      href: '/about/'
+      href: '/about/',
+      target: '_blank',
     },
     {
       description: 'Documentation',
-      href: 'https://docs.linea.org.br/'
+      href: 'https://docs.linea.org.br/',
+      target: '_blank',
     },
     {
       description: 'Monitoring',
-      href: 'https://www.linea.org.br/grafana/'
+      href: 'https://www.linea.org.br/grafana/',
+      target: '_blank',
     },
     {
       description: 'Contact',
-      href: 'https://scienceplatform-dev.linea.org.br/lsp/contact'
+      href: 'https://scienceplatform-dev.linea.org.br/lsp/contact',
+      target: '_blank',
     },
     {
       description: 'LSP',
-      href: 'https://scienceplatform-dev.linea.org.br/lsp'
+      href: 'https://scienceplatform-dev.linea.org.br/lsp',
+      target: '_blank',
     },
     {
       description: 'IDAC',
-      href: 'https://scienceplatform-dev.linea.org.br/idac'
+      href: 'https://scienceplatform-dev.linea.org.br/idac',
+      target: '_blank',
     }
   ];
 
@@ -59,7 +66,7 @@ export default function Header() {
     <List>
       {navItems.map(item => (
         <ListItem button key={item.href}>
-          <Link href={item.href} color="inherit" underline="none">
+          <Link href={item.href} color="inherit" underline="none" target={item.target}>
             <ListItemText primary={item.description} />
           </Link>
         </ListItem>
@@ -73,9 +80,7 @@ export default function Header() {
         background: '-webkit-linear-gradient(120deg,  #31297f, #0989cb)',
       }}>
         <Toolbar>
-          <Link href="/">
-            <Image src="/linea-symbol.svg" alt="LIneA" width={52} height={40} />
-          </Link>
+          <Image src="/linea-symbol.svg" alt="LIneA" width={52} height={40} />
           <IconButton
             edge="start"
             color="inherit"
@@ -88,7 +93,7 @@ export default function Header() {
           <List sx={{ display: { xs: 'none', md: 'flex' } }}>
             {navItems.map(item => (
               <ListItem key={item.href} sx={{ width: 'auto' }}>
-                <Link href={item.href} color="inherit" underline="none">
+                <Link href={item.href} color="inherit" underline="none" target={item.target}>
                   {item.description}
                 </Link>
               </ListItem>
