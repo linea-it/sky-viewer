@@ -20,6 +20,7 @@ RUN yarn run build
 FROM base AS runner
 WORKDIR /app
 COPY --from=builder /app /app
+RUN mkdir -p /app/.next/cache && chmod -R 777 /app/.next/cache
 
 EXPOSE 3000
 CMD ["yarn", "start"]
