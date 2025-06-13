@@ -30,7 +30,7 @@ def environment_settings(request):
     if enviroment in dev_environments:
         is_dev = True
 
-    login_url = settings.LINEA_LOGIN_URL
+    login_url = settings.LOGIN_URL
 
     env_settings = {
         "environment": enviroment,

@@ -19,6 +19,8 @@ if READ_DOT_ENV_FILE:
 # ------------------------------------------------------------------------------
 # https://docs.djangoproject.com/en/dev/ref/settings/#debug
 DEBUG = env.bool("DJANGO_DEBUG", False)
+LOG_LEVEL = env.bool("DJANGO_LOG_LEVEL", "INFO")
+LOG_DIR = "/logs"
 # Local time zone. Choices are
 # http://en.wikipedia.org/wiki/List_of_tz_zones_by_name
 # though not all of them may be available with every OS.
@@ -191,6 +193,7 @@ TEMPLATES = [
                 "django.template.context_processors.tz",
                 "django.contrib.messages.context_processors.messages",
                 "sky_viewer.users.context_processors.allauth_settings",
+                "django_settings_export.settings_export",
             ],
         },
     },
@@ -357,5 +360,29 @@ SPECTACULAR_SETTINGS = {
 # LINEA Settings
 # ------------------------------------------------------------------------------
 ENVIRONMENT_NAME = env("ENVIRONMENT_NAME", default="development").lower()
+# Complete URL of the production server with protocol and port
+BASE_HOST = env("BASE_HOST", default="http://localhost")
+# URL de login utilizada pelo frontend. 
+# Em dev: /admin/login/?next=/
+# Em produção: /api/login/
+LOGIN_URL = "/admin/login/?next=/"
+# LOGIN_URL = "/api/login/"
+LOGOUT_URL = "/api/logout/"
 
+# Urls for login with SAML2/CILogon
+# URL_CILOGON example: https://skyviewer.linea.org.br/saml2/login/?idp=https://satosa.linea.org.br/linea/proxy/aHR0cHM6Ly9jaWxvZ29uLm9yZw==
 LINEA_LOGIN_URL = env("LINEA_LOGIN_URL", default="/admin/login/?next=/")
+RUBIN_LOGIN_URL = env("RUBIN_LOGIN_URL", default="/admin/login/?next=/")
+
+# Url de registro para os diferentes idps.
+LINEA_REGISTER_URL="https://register-dev.linea.org.br/Shibboleth.sso/Login?SAMLDS=1&target=https://register-dev.linea.org.br/registry/co_petitions/start/coef:155&entityID=https://satosa.linea.org.br/linea/proxy/aHR0cHM6Ly9jaWxvZ29uLm9yZw=="
+RUBIN_REGISTER_URL="https://register-dev.linea.org.br/Shibboleth.sso/Login?SAMLDS=1&target=https://register-dev.linea.org.br/registry/co_petitions/start/coef:231&entityID=https://satosa-dev.linea.org.br/linea_saml_mirror/proxy/aHR0cHM6Ly9kYXRhLmxzc3QuY2xvdWQ="
+
+SETTINGS_EXPORT = [
+    "BASE_HOST",
+    "LOGOUT_URL",
+    "LINEA_LOGIN_URL",
+    "LINEA_REGISTER_URL",
+    "RUBIN_LOGIN_URL",
+    "RUBIN_REGISTER_URL"
+]
