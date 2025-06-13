@@ -28,14 +28,17 @@ FROM python AS python-run-stage
 ARG BUILD_ENVIRONMENT=production
 ARG APP_HOME=/app
 
+ARG USER_UID=1000
+ARG USER_GID=1000
+
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV BUILD_ENV=${BUILD_ENVIRONMENT}
 
 WORKDIR ${APP_HOME}
 
-RUN addgroup --system django \
-    && adduser --system --ingroup django django
+RUN addgroup --gid $USER_GID --system django \
+  && adduser  --uid $USER_UID --system --ingroup django django
 
 
 # Install required system dependencies
@@ -99,7 +102,9 @@ RUN chmod +x /start-flower
 COPY --chown=django:django ./backend ${APP_HOME}
 
 # make django owner of the WORKDIR directory as well.
-RUN chown -R django:django ${APP_HOME}
+RUN mkdir -p /logs /data \
+  && chown -R django:django ${APP_HOME} /data /logs \
+  && chmod -R g+w /logs /data 
 
 USER django
 

@@ -13,9 +13,10 @@ services:
     depends_on:
       - postgres
       - redis
-      # - mailpit
+    # - mailpit
     volumes:
       - ./backend:/app:z
+      - ./logs:/logs:z
     env_file:
       - ./.envs/.local/.django
       - ./.envs/.local/.postgres
@@ -52,16 +53,16 @@ services:
     depends_on:
       - backend
       - frontend
-      # - flower
-      # - mailpit
+  # - flower
+  # - mailpit
 
-      # mailpit:
-      #   image: docker.io/axllent/mailpit:latest
-      #   container_name: sky_viewer_local_mailpit
-      #   environment:
-      #     - MP_WEBROOT=/mailpit/
-      #   ports:
-      #     - "8025:8025"
+  # mailpit:
+  #   image: docker.io/axllent/mailpit:latest
+  #   container_name: sky_viewer_local_mailpit
+  #   environment:
+  #     - MP_WEBROOT=/mailpit/
+  #   ports:
+  #     - "8025:8025"
 
   redis:
     image: docker.io/redis:6
