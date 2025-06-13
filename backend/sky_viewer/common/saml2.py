@@ -168,7 +168,10 @@ class LineaSaml2Backend(Saml2Backend):
             user_lookup_value = attributes.get(user_lookup_key, None)
             if isinstance(user_lookup_value, list) and len(user_lookup_value) > 0:
                 user_lookup_value = user_lookup_value[0]
-            logger.info(f"User Lookup Value: {user_lookup_value} Type: {type(user_lookup_value)}")
+                logger.info(f"User Lookup Value: {user_lookup_value} Type: {type(user_lookup_value)}")
+            
+            else:
+                user_lookup_value = None
 
         except Exception as e:
             logger.error("Failed to extract user identifier uid.")
