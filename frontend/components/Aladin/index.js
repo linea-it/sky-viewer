@@ -49,6 +49,23 @@ import A from 'aladin-lite'
 //     // </Box>
 //   );
 // }
+const target = "04 08 35.53 -37 06 27.6"
+const fov = 1.5
+const projection = "AIT"
+
+const aladinParams = {
+  fov: fov,
+  target: target,
+  showGotoControl: true,
+  showFullscreenControl: true,
+  showSimbadPointerControl: true,
+  showShareControl: true,
+  realFullscreen: true,
+  showCooGridControl: true,
+  projection: projection,
+  showContextMenu: true,
+  showSettingsControl: true
+};
 
 export default class Aladin extends React.Component {
   // Importante tentei criar o componente com Hooks mas não funcionou corretamente.
@@ -102,11 +119,14 @@ export default class Aladin extends React.Component {
       //   fullScreen: false
       // })
 
-      this.aladin = A.aladin(`#${this.id}`, {
-        // target: "239.306940 -47.5654074"
-        target: "04 08 35.53 -37 06 27.6",
-        fov: 0.5,
-      })
+      // this.aladin = A.aladin(`#${this.id}`, {
+      //   // target: "239.306940 -47.5654074"
+      //   target: "04 08 35.53 -37 06 27.6",
+      //   fov: 0.5,
+      // })
+
+      this.aladin = A.aladin(`#${this.id}`, aladinParams)
+
 
       // LSST DP0.2 IRG HIPS IMAGE
       this.aladin.setImageSurvey(this.aladin.createImageSurvey(
