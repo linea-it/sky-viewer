@@ -9,8 +9,6 @@ export default function Home() {
   const { user } = useAuth();
   const [isClient, setIsClient] = useState(false)
 
-  // console.log("Home page user: ", user);
-
   useEffect(() => {
     setIsClient(true)
   }, [])
