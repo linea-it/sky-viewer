@@ -73,6 +73,8 @@ export default class Aladin extends React.Component {
     // console.log("Aladin - constructor")
     super(props)
 
+    //    console.log("User Groups: ", props.userGroups)
+
     // Cria um ID unico para div que vai receber o aladin
     // this.id = `aladin-container-${v4()}`
     this.id = `aladin-container`
@@ -108,15 +110,22 @@ export default class Aladin extends React.Component {
         fov: 0.5,
       })
 
-      // LSST DP0.2 IRG HIPS IMAGE
-      this.aladin.setImageSurvey(this.aladin.createImageSurvey(
-        "LSST_DP02_IRG_LIneA",
-        "LSST DP0.2 IRG at LIneA",
-        "https://datasets.linea.org.br/data/releases/lsst/dp02/images/hips/",
-        "equatorial",
-      ), { imgFormat: 'hips' })
+      // PRIVATE RELEASES
+      // ----------------------------------------------------------
+      if (this.props.userGroups.includes('dp02')) {
+        // LSST DP0.2 IRG HIPS IMAGE
+        this.aladin.setImageSurvey(this.aladin.createImageSurvey(
+          "LSST_DP02_IRG_LIneA",
+          "LSST DP0.2 IRG at LIneA",
+          "https://datasets.linea.org.br/data/releases/lsst/dp02/images/hips/",
+          "equatorial",
+        ), { imgFormat: 'hips' })
+      }
 
 
+
+      // PUBLIC RELEASES
+      // ----------------------------------------------------------
       // DES DR2 IRG HIPS IMAGE
       // https://aladin.cds.unistra.fr/AladinLite/doc/API/#image-layers
       // https://aladin.cds.unistra.fr/AladinLite/doc/API/
