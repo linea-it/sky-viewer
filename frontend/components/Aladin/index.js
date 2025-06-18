@@ -112,7 +112,7 @@ export default class Aladin extends React.Component {
 
       // PRIVATE RELEASES
       // ----------------------------------------------------------
-      if (this.props.userGroups.includes('dp02')) {
+      if (Array.isArray(this.props.userGroups) && this.props.userGroups.includes('dp02')) {
         // LSST DP0.2 IRG HIPS IMAGE
         this.aladin.setImageSurvey(this.aladin.createImageSurvey(
           "LSST_DP02_IRG_LIneA",
