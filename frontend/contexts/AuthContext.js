@@ -11,6 +11,7 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState()
   const [settings, setSettings] = useState({})
 
+
   useEffect(() => {
     const { 'skyviewer.csrftoken': access_token } = parseCookies()
 
