@@ -79,6 +79,9 @@ CACHES = {
 #     default=True,
 # )
 
+SESSION_COOKIE_DOMAIN  = ".linea.org.br"
+CSRF_COOKIE_DOMAIN = ".linea.org.br"
+
 # STATIC & MEDIA
 # ------------------------
 STORAGES = {
