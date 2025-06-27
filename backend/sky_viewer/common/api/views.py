@@ -46,28 +46,9 @@ def environment_settings(request):
     }
     return Response(env_settings, status=status.HTTP_200_OK)
 
+
 @csrf_exempt
-@login_required
 def nginx_serve_protected_hips(request):
-    logger = logging.getLogger("django")
-    logger.info("-----------------------------------")
-    logger.info("nginx_serve_protected_hips()")
-
-    data = {
-        'X-Original-URI': request.META.get('HTTP_X_ORIGINAL_URI'),
-        'Cookie': request.META.get('HTTP_COOKIE'),
-        'Path': request.path,
-        'Method': request.method,
-        'META': {k: v for k, v in request.META.items() if k.startswith('HTTP_')},
-    }
-
-    logger.info(data)
-
-    # TODO: Check if the user is authenticated and have group membership for HIPS images
-    return HttpResponse({}, content_type="application/json", status=200)
-
-@csrf_exempt
-def nginx_serve_protected_hips_debug(request):
     logger = logging.getLogger("django")
     logger.info("-----------------------------------")
     logger.info("nginx_serve_protected_hips_debug()")
@@ -80,7 +61,7 @@ def nginx_serve_protected_hips_debug(request):
         'META': {k: v for k, v in request.META.items() if k.startswith('HTTP_')},
     }
 
-    logger.info(data)
+    logger.debug(data)
 
     original_uri = request.META.get('HTTP_X_ORIGINAL_URI')
     if original_uri.endswith('/properties') or original_uri.endswith('/Moc.fits'):
@@ -93,6 +74,11 @@ def nginx_serve_protected_hips_debug(request):
     
     logger.info(f"User is authenticated: {request.user.username}")
 
-
-    # TODO: Check if the user is authenticated and have group membership for HIPS images
+    # Identifie release from the original URI
+    if original_uri.find('/lsst/dp02/') > -1:
+        # Check if the user has the required group membership for HIPS images
+        if not request.user.groups.filter(name='dp02').exists():
+            logger.warning(f"User {request.user.username} does not have access to DP02 HIPS images.")
+            return HttpResponseForbidden({"message":"User does not have access to DP02 HIPS images."}, content_type="application/json", status=403)
+    
     return HttpResponse({}, content_type="application/json", status=200)

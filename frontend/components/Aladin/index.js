@@ -110,20 +110,6 @@ export default class Aladin extends React.Component {
         fov: 0.5,
       })
 
-      // PRIVATE RELEASES
-      // ----------------------------------------------------------
-      if (Array.isArray(this.props.userGroups) && this.props.userGroups.includes('dp02')) {
-        // LSST DP0.2 IRG HIPS IMAGE
-        this.aladin.setImageSurvey(this.aladin.createImageSurvey(
-          "LSST_DP02_IRG_LIneA",
-          "LSST DP0.2 IRG at LIneA",
-          "https://datasets.linea.org.br/data/releases/lsst/dp02/images/hips/",
-          "equatorial",
-        ), { imgFormat: 'hips', requestCredentials: 'include' })
-      }
-
-
-
       // PUBLIC RELEASES
       // ----------------------------------------------------------
       // DES DR2 IRG HIPS IMAGE
@@ -135,6 +121,14 @@ export default class Aladin extends React.Component {
       //   "https://datasets.linea.org.br/data/releases/des/dr2/images/hips/",
       //   "equatorial",
       // ), { imgFormat: 'hips', requestCredentials: 'include', requestMode: 'cors' })
+
+      const des_dr2 = this.aladin.createImageSurvey(
+        "DES_DR2_IRG_LIneA",
+        "DES DR2 IRG at LIneA",
+        "https://datasets.linea.org.br/data/releases/des/dr2/images/hips/",
+        "equatorial",
+      )
+      this.aladin.setImageSurvey(des_dr2, { imgFormat: 'hips', requestCredentials: 'include', requestMode: 'cors' })
 
 
       // Adiciona a imagem mas não seleciona como imagem principal
@@ -150,17 +144,15 @@ export default class Aladin extends React.Component {
       //   }
       // ))
 
+      // this.aladin.setImageSurvey(this.aladin.createImageSurvey(
+      //   "DES_DR2_IRG_LIneA",
+      //   "DES DR2 Teste Credentials",
+      //   "https://skyviewer-dev.linea.org.br/data/releases/des/dr2/images/hips/",
+      //   "equatorial",
+      // ), { imgFormat: 'hips', requestCredentials: 'include', requestMode: 'cors' })
 
-      this.aladin.setImageSurvey(this.aladin.createImageSurvey(
-        "DES_DR2_IRG_LIneA",
-        "DES DR2 Teste Credentials",
-        "https://skyviewer-dev.linea.org.br/data/releases/des/dr2/images/hips/",
-        "equatorial",
-      ), { imgFormat: 'hips', requestCredentials: 'include', requestMode: 'cors' })
-
-
-
-
+      //  PUBLIC CATALOGS
+      // ----------------------------------------------------------
       // DES DR2 Catalog HIPScat/HATS
       // https://aladin.cds.unistra.fr/AladinLite/doc/API/examples/catalog-hips-filter/
       // https://hipscat.cds.unistra.fr/HiPSCatService/I/345/gaia2/
@@ -172,7 +164,31 @@ export default class Aladin extends React.Component {
           color: '#33ff42',
           name: 'DES DR2',
         });
-      this.aladin.addCatalog(hips);
+      // this.aladin.addCatalog(hips);
+
+
+
+      // PRIVATE RELEASES
+      // ----------------------------------------------------------
+
+      // LSST DP0.2 IRG HIPS IMAGE
+      if (Array.isArray(this.props.userGroups) && this.props.userGroups.includes('dp02')) {
+        // "https://datasets.linea.org.br/data/releases/lsst/dp02/images/hips/",
+        // this.aladin.setImageSurvey(this.aladin.createImageSurvey(
+        //   "LSST_DP02_IRG_LIneA",
+        //   "LSST DP0.2 IRG at LIneA",
+        //   "https://skyviewer-dev.linea.org.br/data/releases/lsst/dp02/images/hips/",
+        //   "equatorial",
+        // ), { imgFormat: 'hips', requestCredentials: 'include', requestMode: 'cors' })
+        const lsst_dp02 = this.aladin.createImageSurvey(
+          "LSST_DP02_IRG_LIneA",
+          "LSST DP0.2 IRG at LIneA",
+          "https://skyviewer-dev.linea.org.br/data/releases/lsst/dp02/images/hips/",
+          "equatorial",
+        )
+        this.aladin.setImageSurvey(lsst_dp02, { imgFormat: 'hips', requestCredentials: 'include', requestMode: 'cors' })
+        console.log("LSST DP0.2 IRG HIPS IMAGE added")
+      }
 
 
       // console.log(this.aladin)
@@ -190,6 +206,7 @@ export default class Aladin extends React.Component {
       //   // this.drawCatalog()
       //   // // Centraliza a imagem na posição
       //   // this.goToPosition(this.props.ra, this.props.dec)
+
     })
   }
 

@@ -49,7 +49,6 @@ urlpatterns += [
         name="environment_settings",
     ),
     path("api/nginx_serve_protected_hips/", CommonViews.nginx_serve_protected_hips, name="protected_hips"),
-    path("api/nginx_serve_protected_hips_debug/", CommonViews.nginx_serve_protected_hips_debug, name="protected_hips_debug"),
     
     path("api/teste/", CommonViews.teste, name="teste"),
     # DRF auth token
