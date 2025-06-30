@@ -614,6 +614,10 @@ ajv@^6.12.4:
     json-schema-traverse "^0.4.1"
     uri-js "^4.2.2"
 
+aladin-lite@/app/aladin-lite-3.7.0-beta.tgz:
+  version "3.7.0-beta"
+  resolved "/app/aladin-lite-3.7.0-beta.tgz#36cf9c942621a3b20b48cec20fca2ace4c71377b"
+
 aladin-lite@^3.5.1-beta:
   version "3.5.1-beta"
   resolved "https://registry.yarnpkg.com/aladin-lite/-/aladin-lite-3.5.1-beta.tgz#4dfc4e56aad8c35966279316c08ec69b986f9a39"
