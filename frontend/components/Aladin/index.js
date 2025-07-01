@@ -1,252 +1,105 @@
 'use client';
-import React from 'react'
-import Box from '@mui/material/Box';
-import A from 'aladin-lite'
-// import { v4 } from "uuid";
 
-// export default function Aladin() {
+import { AladinProvider } from './AladinProvider';
+import AladinViewer from './AladinViewer';
+import CatalogControls from './CatalogControls';
 
-//   let aladin
+export default function Aladin({ userGroups = [] }) {
+  return (
+    <AladinProvider
+      aladinParams={{
+        fov: 1.5,
+        target: "04 08 35.53 -37 06 27.6",
+        projection: "AIT",
+        showGotoControl: true,
+        showFullscreenControl: true,
+        showSimbadPointerControl: true,
+        realFullscreen: true,
+        showCooGridControl: true,
+        showContextMenu: true,
+        showSettingsControl: true,
+      }}
+      userGroups={userGroups}
+    >
+      <div style={{ display: 'flex', height: '100vh' }}>
+        <div style={{ flex: 1 }}>
+          <AladinViewer />
+        </div>
+        <div style={{ width: '300px', padding: '1rem', background: '#eee' }}>
+          <CatalogControls />
+        </div>
+      </div>
+
+    </AladinProvider>
+  );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+// 'use client';
+
+// import { useEffect } from 'react';
+// import Box from '@mui/material/Box';
+// import { useAladin } from './useAladin';
+
+// export default function AladinViewer({ userGroups = [] }) {
+//   const {
+//     containerRef,
+//     createSurvey,
+//     setSurvey,
+//     isReady,
+//   } = useAladin({
+//     fov: 1.5,
+//     target: "04 08 35.53 -37 06 27.6",
+//     projection: "AIT",
+//     showGotoControl: true,
+//     showFullscreenControl: true,
+//     showSimbadPointerControl: true,
+//     realFullscreen: true,
+//     showCooGridControl: true,
+//     showContextMenu: true,
+//     showSettingsControl: true,
+//   });
 
 //   useEffect(() => {
-//     console.log("I have been mounted")
-//     A.init.then(() => {
-//       aladin = A.aladin('aladin-container', {
-//         survey: 'P/allWISE/color', // set initial image survey
-//         // survey: 'P/DSS2/color', // set initial image survey
-//         projection: 'SIN', // set a projection
-//         fov: 0.12, // initial field of view in degrees
-//         // target: 'NGC 2175', // initial target
-//         cooFrame: 'ICRS', // set galactic frame reticleColor: '#ff89ff', // change reticle color
-//         showReticle: false,
-//         showCooGrid: false,
-//         fullScreen: false
-//       })
-//     })
+//     if (!isReady) return;
 
-//   }, [])
+//     const des_dr2 = createSurvey(
+//       "DES_DR2_IRG_LIneA",
+//       "DES DR2 IRG at LIneA",
+//       "https://datasets.linea.org.br/data/releases/des/dr2/images/hips/",
+//       "equatorial"
+//     );
+//     setSurvey(des_dr2);
+
+//     if (userGroups.includes('dp02')) {
+//       const lsst_dp02 = createSurvey(
+//         "LSST_DP02_IRG_LIneA",
+//         "LSST DP0.2 IRG at LIneA",
+//         "https://skyviewer-dev.linea.org.br/data/releases/lsst/dp02/images/hips/",
+//         "equatorial"
+//       );
+//       setSurvey(lsst_dp02);
+//     }
+//   }, [isReady, userGroups, createSurvey, setSurvey]);
 
 //   return (
-//     <>
-//       {typeof window !== "undefined" && (
-//         <Box
-//           id='aladin-container'
-//           sx={{
-//             backgroundColor: 'darkgray',
-//             height: '100%',
-//             width: '100%',
-//           }}>
-//         </Box>
-//       )}
-//     </>
-//     // <Box
-//     //   id='aladin-container'
-//     //   sx={{
-//     //     backgroundColor: 'darkgray',
-//     //     height: '100%',
-//     //     width: '100%',
-//     //   }}>
-//     // </Box>
+//     <Box
+//       ref={containerRef}
+//       sx={{
+//         backgroundColor: 'darkgray',
+//         height: '100%',
+//         width: '100%',
+//       }}
+//     />
 //   );
 // }
-const target = "04 08 35.53 -37 06 27.6"
-const fov = 1.5
-const projection = "AIT"
-
-const aladinParams = {
-  fov: fov,
-  target: target,
-  showGotoControl: true,
-  showFullscreenControl: true,
-  showSimbadPointerControl: true,
-  showShareControl: true,
-  realFullscreen: true,
-  showCooGridControl: true,
-  projection: projection,
-  showContextMenu: true,
-  showSettingsControl: true
-};
-
-export default class Aladin extends React.Component {
-  // Importante tentei criar o componente com Hooks mas não funcionou corretamente.
-  // Usando Class based Component funcionou como esperado.
-  // Acredito que seja pelo comportamento do didmount.
-  // Aladin precisa que a div já exista antes da função ser chamada.
-  //
-  // Exemplos que usei como base:
-  // https://blog.logrocket.com/complete-guide-react-refs/
-  // https://legacy.reactjs.org/docs/hooks-effect.html
-  //
-
-  // Aladin Lite Repository
-  // https://github.com/cds-astro/aladin-lite/tree/master#
-
-  // Complete List with all Options for Aladin
-  // https://aladin.cds.unistra.fr/AladinLite/doc/API/
-  // Lista de Exemplos:
-  // https://aladin.cds.unistra.fr/AladinLite/doc/API/examples/
-
-  constructor(props) {
-    // console.log("Aladin - constructor")
-    super(props)
-
-    //    console.log("User Groups: ", props.userGroups)
-
-    // Cria um ID unico para div que vai receber o aladin
-    // this.id = `aladin-container-${v4()}`
-    this.id = `aladin-container`
-
-  }
-
-  componentDidMount() {
-    A.init.then(() => {
-      // this.aladin = A.aladin(`#${this.id}`, {
-      //   survey: 'P/allWISE/color', // set initial image survey
-      //   // survey: 'P/DSS2/color', // set initial image survey
-      //   projection: 'SIN', // set a projection
-      //   fov: 0.12, // initial field of view in degrees
-      //   // target: 'NGC 2175', // initial target
-      //   cooFrame: 'ICRS', // set galactic frame reticleColor: '#ff89ff', // change reticle color
-      //   showReticle: false,
-      //   showCooGrid: false,
-      //   fullScreen: false
-      // })
-
-      // this.aladin = A.aladin(`#${this.id}`, {
-      //   // projection: 'SIN', // set a projection
-      //   // fov: 0.12, // initial field of view in degrees
-      //   // cooFrame: 'ICRS', // set galactic frame reticleColor: '#ff89ff', // change reticle color
-      //   showReticle: false,
-      //   showCooGrid: false,
-      //   fullScreen: false
-      // })
-
-      // this.aladin = A.aladin(`#${this.id}`, {
-      //   // target: "239.306940 -47.5654074"
-      //   target: "04 08 35.53 -37 06 27.6",
-      //   fov: 0.5,
-      // })
-
-      this.aladin = A.aladin(`#${this.id}`, aladinParams)
-
-
-      // PUBLIC RELEASES
-      // ----------------------------------------------------------
-      // DES DR2 IRG HIPS IMAGE
-      // https://aladin.cds.unistra.fr/AladinLite/doc/API/#image-layers
-      // https://aladin.cds.unistra.fr/AladinLite/doc/API/
-      // this.aladin.setImageSurvey(this.aladin.createImageSurvey(
-      //   "DES_DR2_IRG_LIneA",
-      //   "DES DR2 IRG at LIneA",
-      //   "https://datasets.linea.org.br/data/releases/des/dr2/images/hips/",
-      //   "equatorial",
-      // ), { imgFormat: 'hips', requestCredentials: 'include', requestMode: 'cors' })
-
-      const des_dr2 = this.aladin.createImageSurvey(
-        "DES_DR2_IRG_LIneA",
-        "DES DR2 IRG at LIneA",
-        "https://datasets.linea.org.br/data/releases/des/dr2/images/hips/",
-        "equatorial",
-      )
-      this.aladin.setImageSurvey(des_dr2, { imgFormat: 'hips', requestCredentials: 'include', requestMode: 'cors' })
-
-
-      // Adiciona a imagem mas não seleciona como imagem principal
-      // this.aladin.addNewImageLayer(A.HiPS(
-      //   "https://datasets.linea.org.br/data/releases/des/dr2/images/hips/",
-      //   {
-      //     name: "DES DR2 IRG at LIneA",
-      //     imgFormat: 'jpg',
-      //     requestCredentials: 'include',
-      //     requestMode: 'cors'
-      //     // "DES DR2 IRG at LIneA",
-      //     // "equatorial",
-      //   }
-      // ))
-
-      // this.aladin.setImageSurvey(this.aladin.createImageSurvey(
-      //   "DES_DR2_IRG_LIneA",
-      //   "DES DR2 Teste Credentials",
-      //   "https://skyviewer-dev.linea.org.br/data/releases/des/dr2/images/hips/",
-      //   "equatorial",
-      // ), { imgFormat: 'hips', requestCredentials: 'include', requestMode: 'cors' })
-
-      //  PUBLIC CATALOGS
-      // ----------------------------------------------------------
-      // DES DR2 Catalog HIPScat/HATS
-      // https://aladin.cds.unistra.fr/AladinLite/doc/API/examples/catalog-hips-filter/
-      // https://hipscat.cds.unistra.fr/HiPSCatService/I/345/gaia2/
-      // https://aladin.cds.unistra.fr/AladinLite/doc/tutorials/interactive-finding-chart/
-      var hips = A.catalogHiPS(
-        'https://datasets.linea.org.br/data/releases/des/dr2/catalogs/hips/',
-        {
-          onClick: 'showTable',
-          color: '#33ff42',
-          name: 'DES DR2',
-        });
-      // this.aladin.addCatalog(hips);
-
-
-
-      // PRIVATE RELEASES
-      // ----------------------------------------------------------
-
-      // LSST DP0.2 IRG HIPS IMAGE
-      if (Array.isArray(this.props.userGroups) && this.props.userGroups.includes('dp02')) {
-        // "https://datasets.linea.org.br/data/releases/lsst/dp02/images/hips/",
-        // this.aladin.setImageSurvey(this.aladin.createImageSurvey(
-        //   "LSST_DP02_IRG_LIneA",
-        //   "LSST DP0.2 IRG at LIneA",
-        //   "https://skyviewer-dev.linea.org.br/data/releases/lsst/dp02/images/hips/",
-        //   "equatorial",
-        // ), { imgFormat: 'hips', requestCredentials: 'include', requestMode: 'cors' })
-        const lsst_dp02 = this.aladin.createImageSurvey(
-          "LSST_DP02_IRG_LIneA",
-          "LSST DP0.2 IRG at LIneA",
-          "https://skyviewer-dev.linea.org.br/data/releases/lsst/dp02/images/hips/",
-          "equatorial",
-        )
-        this.aladin.setImageSurvey(lsst_dp02, { imgFormat: 'hips', requestCredentials: 'include', requestMode: 'cors' })
-        console.log("LSST DP0.2 IRG HIPS IMAGE added")
-      }
-
-
-      // console.log(this.aladin)
-
-      // var hips = A.catalogHiPS(
-      //   'https://scienceserver-dev.linea.org.br/data/releases/lsst/dp02/catalogs/',
-      //   {
-      //     onClick: 'showTable',
-      //     color: '#8e44ad',
-      //     name: 'LSST DP0.2',
-      //   });
-      // this.aladin.addCatalog(hips);
-
-      //   // // Cria um catalogo com um unico source
-      //   // this.drawCatalog()
-      //   // // Centraliza a imagem na posição
-      //   // this.goToPosition(this.props.ra, this.props.dec)
-
-    })
-  }
-
-  componentWillUnmount() { }
-
-
-  render() {
-    return (
-      <>
-        {typeof window !== "undefined" && (
-          <Box
-            id={this.id}
-            sx={{
-              backgroundColor: 'darkgray',
-              height: '100%',
-              width: '100%',
-            }}>
-          </Box>
-        )}
-      </>
-    )
-  }
-}
