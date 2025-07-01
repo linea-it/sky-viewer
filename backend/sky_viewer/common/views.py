@@ -1,6 +1,7 @@
 from django.shortcuts import render
 import logging
 
+
 def saml2_template_failure(request, exception=None, status=403, **kwargs):
     """ Renders a simple template with an error message. """
     logger = logging.getLogger("djangosaml2")

@@ -9,6 +9,7 @@ ENV NODE_OPTIONS=--max_old_space_size=8192
 WORKDIR /app
 COPY ./frontend/package.json /app
 COPY ./frontend/yarn.lock /app
+COPY ./frontend/aladin-lite-3.7.0-beta.tgz /app
 RUN yarn --non-interactive --ignore-optional --network-timeout 500000
 
 FROM base AS builder

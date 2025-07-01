@@ -90,6 +90,8 @@ export default class Aladin extends React.Component {
     // console.log("Aladin - constructor")
     super(props)
 
+    //    console.log("User Groups: ", props.userGroups)
+
     // Cria um ID unico para div que vai receber o aladin
     // this.id = `aladin-container-${v4()}`
     this.id = `aladin-container`
@@ -128,25 +130,49 @@ export default class Aladin extends React.Component {
       this.aladin = A.aladin(`#${this.id}`, aladinParams)
 
 
-      // LSST DP0.2 IRG HIPS IMAGE
-      this.aladin.setImageSurvey(this.aladin.createImageSurvey(
-        "LSST_DP02_IRG_LIneA",
-        "LSST DP0.2 IRG at LIneA",
-        "https://datasets.linea.org.br/data/releases/lsst/dp02/images/hips/",
-        "equatorial",
-      ), { imgFormat: 'hips' })
-
-
+      // PUBLIC RELEASES
+      // ----------------------------------------------------------
       // DES DR2 IRG HIPS IMAGE
       // https://aladin.cds.unistra.fr/AladinLite/doc/API/#image-layers
       // https://aladin.cds.unistra.fr/AladinLite/doc/API/
-      this.aladin.setImageSurvey(this.aladin.createImageSurvey(
+      // this.aladin.setImageSurvey(this.aladin.createImageSurvey(
+      //   "DES_DR2_IRG_LIneA",
+      //   "DES DR2 IRG at LIneA",
+      //   "https://datasets.linea.org.br/data/releases/des/dr2/images/hips/",
+      //   "equatorial",
+      // ), { imgFormat: 'hips', requestCredentials: 'include', requestMode: 'cors' })
+
+      const des_dr2 = this.aladin.createImageSurvey(
         "DES_DR2_IRG_LIneA",
         "DES DR2 IRG at LIneA",
         "https://datasets.linea.org.br/data/releases/des/dr2/images/hips/",
         "equatorial",
-      ), { imgFormat: 'hips' })
+      )
+      this.aladin.setImageSurvey(des_dr2, { imgFormat: 'hips', requestCredentials: 'include', requestMode: 'cors' })
 
+
+      // Adiciona a imagem mas não seleciona como imagem principal
+      // this.aladin.addNewImageLayer(A.HiPS(
+      //   "https://datasets.linea.org.br/data/releases/des/dr2/images/hips/",
+      //   {
+      //     name: "DES DR2 IRG at LIneA",
+      //     imgFormat: 'jpg',
+      //     requestCredentials: 'include',
+      //     requestMode: 'cors'
+      //     // "DES DR2 IRG at LIneA",
+      //     // "equatorial",
+      //   }
+      // ))
+
+      // this.aladin.setImageSurvey(this.aladin.createImageSurvey(
+      //   "DES_DR2_IRG_LIneA",
+      //   "DES DR2 Teste Credentials",
+      //   "https://skyviewer-dev.linea.org.br/data/releases/des/dr2/images/hips/",
+      //   "equatorial",
+      // ), { imgFormat: 'hips', requestCredentials: 'include', requestMode: 'cors' })
+
+      //  PUBLIC CATALOGS
+      // ----------------------------------------------------------
       // DES DR2 Catalog HIPScat/HATS
       // https://aladin.cds.unistra.fr/AladinLite/doc/API/examples/catalog-hips-filter/
       // https://hipscat.cds.unistra.fr/HiPSCatService/I/345/gaia2/
@@ -158,7 +184,33 @@ export default class Aladin extends React.Component {
           color: '#33ff42',
           name: 'DES DR2',
         });
-      this.aladin.addCatalog(hips);
+      // this.aladin.addCatalog(hips);
+
+
+
+      // PRIVATE RELEASES
+      // ----------------------------------------------------------
+
+      // LSST DP0.2 IRG HIPS IMAGE
+      if (Array.isArray(this.props.userGroups) && this.props.userGroups.includes('dp02')) {
+        // "https://datasets.linea.org.br/data/releases/lsst/dp02/images/hips/",
+        // this.aladin.setImageSurvey(this.aladin.createImageSurvey(
+        //   "LSST_DP02_IRG_LIneA",
+        //   "LSST DP0.2 IRG at LIneA",
+        //   "https://skyviewer-dev.linea.org.br/data/releases/lsst/dp02/images/hips/",
+        //   "equatorial",
+        // ), { imgFormat: 'hips', requestCredentials: 'include', requestMode: 'cors' })
+        const lsst_dp02 = this.aladin.createImageSurvey(
+          "LSST_DP02_IRG_LIneA",
+          "LSST DP0.2 IRG at LIneA",
+          "https://skyviewer-dev.linea.org.br/data/releases/lsst/dp02/images/hips/",
+          "equatorial",
+        )
+        this.aladin.setImageSurvey(lsst_dp02, { imgFormat: 'hips', requestCredentials: 'include', requestMode: 'cors' })
+        console.log("LSST DP0.2 IRG HIPS IMAGE added")
+      }
+
+
       // console.log(this.aladin)
 
       // var hips = A.catalogHiPS(
@@ -170,20 +222,11 @@ export default class Aladin extends React.Component {
       //   });
       // this.aladin.addCatalog(hips);
 
-      {/* aladin.setImageSurvey(
-        aladin.createImageSurvey(
-          "DSS blue band",
-          "Color DSS blue HiPS",
-          "http://alasky.cds.unistra.fr/DSS/DSS2-blue-XJ-S/",
-          "equatorial",
-          9,
-          {imgFormat: 'fits'})
-        ); // setting a custom HiPS */}
-
       //   // // Cria um catalogo com um unico source
       //   // this.drawCatalog()
       //   // // Centraliza a imagem na posição
       //   // this.goToPosition(this.props.ra, this.props.dec)
+
     })
   }
 
