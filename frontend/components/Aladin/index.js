@@ -2,8 +2,7 @@
 
 import { AladinProvider } from './AladinProvider';
 import AladinViewer from './AladinViewer';
-import CatalogControls from './CatalogControls';
-
+import Controls from '@/components/Aladin/Controls';
 export default function Aladin({ userGroups = [] }) {
   return (
     <AladinProvider
@@ -21,15 +20,22 @@ export default function Aladin({ userGroups = [] }) {
       }}
       userGroups={userGroups}
     >
-      <div style={{ display: 'flex', height: '100vh' }}>
+      <div style={{
+        display: 'flex',
+        height: '100%',
+        width: '100%',
+      }}>
         <div style={{ flex: 1 }}>
           <AladinViewer />
         </div>
-        <div style={{ width: '300px', padding: '1rem', background: '#eee' }}>
-          <CatalogControls />
+        <div style={{
+          width: '300px',
+          // padding: '1rem', 
+          background: '#eee'
+        }}>
+          <Controls />
         </div>
       </div>
-
     </AladinProvider>
   );
 }

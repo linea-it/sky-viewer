@@ -6,13 +6,16 @@ import { createContext, useContext } from 'react';
  * Criação do contexto do Aladin.
  */
 export const AladinContext = createContext({
-  aladin: null,
+  containerRef: null,
+  aladinRef: null,
+  catalogsRef: {},
   isReady: false,
   setFoV: () => { },
   setTarget: () => { },
   setSurvey: () => { },
   createSurvey: () => { },
   addCatalog: () => { },
+  toggleCatalogVisibility: () => { },
   addMarker: () => { },
 });
 

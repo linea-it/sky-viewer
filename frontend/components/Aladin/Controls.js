@@ -1,9 +1,12 @@
 'use client';
 
 import { useAladinContext } from './AladinContext';
-import { Button, Stack, Typography } from '@mui/material';
+import { Button, Typography } from '@mui/material';
+import Box from '@mui/material/Box';
+import Stack from '@mui/material/Stack';
+import CatalogControls from '@/components/Aladin/CatalogControls';
 
-export default function CatalogControls() {
+export default function Controls() {
     const { isReady, setFoV, setTarget, addMarker } = useAladinContext();
 
     const handleGotoM42 = () => {
@@ -13,7 +16,7 @@ export default function CatalogControls() {
     };
 
     return (
-        <Stack spacing={2}>
+        <Stack spacing={2} m={2}>
             <Typography variant="h6">Surveys</Typography>
             <Button variant="contained" disabled={!isReady} onClick={handleGotoM42}>
                 DES DR2 IRG
@@ -22,10 +25,8 @@ export default function CatalogControls() {
                 LSST DP0.2 IRG
             </Button>
             <hr></hr>
-            <Typography variant="h6">Catalogs</Typography>
-            <Button variant="contained" disabled={!isReady} onClick={handleGotoM42}>
-                Ir para Orion (M42)
-            </Button>
+            <CatalogControls />
         </Stack>
+
     );
 }
