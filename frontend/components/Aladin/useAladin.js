@@ -43,14 +43,14 @@ export function useAladin(aladinParams = {}, userGroups = []) {
     // Adiciona catálogo DES DR2 (público)
     {
       id: 'des_dr2',
-      name: 'DES DR2',
+      name: 'DES DR2 at LIneA',
       url: 'https://datasets.linea.org.br/data/releases/des/dr2/catalogs/hips/',
       options: { color: '#33ff42' }
     },
     // Adiciona catálogo LSST DP0.2 (privado)
     {
       id: 'lsst_dp02',
-      name: 'LSST DP0.2',
+      name: 'LSST DP0.2 at LIneA',
       url: 'https://datasets.linea.org.br/data/releases/des/dr2/catalogs/hips/', // TODO: Url temporaria, deve ser alterada para o catálogo correto
       options: { color: '#2BC7EE' },
       requireGroup: 'dp02', // Grupo necessário para acesso
