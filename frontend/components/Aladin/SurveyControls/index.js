@@ -21,7 +21,6 @@ export default function SurveyControls() {
         {surveysRef.current && Object.keys(surveysRef.current).length > 0 && (
           Object.keys(surveysRef.current).map(key => {
             const survey = surveysRef.current[key];
-            console.log(survey)
             return (
               <SurveyListItem key={`survey-list-item-${survey.id}`} survey={survey} />
             )
