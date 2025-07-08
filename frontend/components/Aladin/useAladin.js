@@ -9,7 +9,74 @@ export function useAladin(aladinParams = {}, userGroups = []) {
   const containerRef = useRef(null);
   const aladinRef = useRef(null);
   const [isReady, setIsReady] = useState(false);
+  const surveysRef = useRef({})
   const catalogsRef = useRef({})
+  const [currentSurveyId, setCurrentSurveyId] = useState(null);
+
+  const surveys = [
+    // Adiciona imagem do DES DR2 (pública)
+    {
+      id: "DES_DR2_IRG_LIneA",
+      name: "DES DR2 IRG at LIneA",
+      url: "https://datasets.linea.org.br/data/releases/des/dr2/images/hips/",
+      cooFrame: "equatorial",
+      options: {
+        requestCredentials: 'include',
+        requestMode: 'cors',
+      }
+    },
+    // Adiciona imagem do LSST DP0.2 (privada, requer grupo 'dp02')
+    {
+      id: "LSST_DP02_IRG_LIneA",
+      name: "LSST DP0.2 IRG at LIneA",
+      url: "https://skyviewer-dev.linea.org.br/data/releases/lsst/dp02/images/hips/",
+      cooFrame: "equatorial",
+      options: {
+        requestCredentials: 'include',
+        requestMode: 'cors',
+      },
+      requireGroup: 'dp02', // Grupo necessário para acesso
+    }]
+
+  // catálogos HiPScat
+  const catalogs = [
+    // Adiciona catálogo DES DR2 (público)
+    {
+      id: 'des_dr2',
+      name: 'DES DR2',
+      url: 'https://datasets.linea.org.br/data/releases/des/dr2/catalogs/hips/',
+      options: { color: '#33ff42' }
+    },
+    // Adiciona catálogo LSST DP0.2 (privado)
+    {
+      id: 'lsst_dp02',
+      name: 'LSST DP0.2',
+      url: 'https://datasets.linea.org.br/data/releases/des/dr2/catalogs/hips/', // TODO: Url temporaria, deve ser alterada para o catálogo correto
+      options: { color: '#2BC7EE' },
+      requireGroup: 'dp02', // Grupo necessário para acesso
+    },
+    // Adiciona Catalogos default do Aladin ( Simbad, Gaia DR3, 2MASS )
+    {
+      id: 'simbad',
+      name: 'SIMBAD',
+      url: 'https://hipscat.cds.unistra.fr/HiPSCatService/SIMBAD',
+      options: {
+        shape: 'circle', sourceSize: 8, color: '#318d80'
+      }
+    },
+    {
+      id: 'gaia-dr3',
+      name: 'Gaia DR3',
+      url: 'https://hipscat.cds.unistra.fr/HiPSCatService/I/355/gaiadr3',
+      options: { shape: 'square', sourceSize: 8, color: '#6baed6' }
+    },
+    {
+      id: '2mass',
+      name: '2MASS',
+      url: 'https://hipscat.cds.unistra.fr/HiPSCatService/II/246/out',
+      options: { shape: 'plus', sourceSize: 8, color: '#dd2233' }
+    }
+  ]
 
   useEffect(() => {
     let isCancelled = false;
@@ -23,64 +90,55 @@ export function useAladin(aladinParams = {}, userGroups = []) {
       aladinRef.current = A.aladin(containerRef.current, aladinParams);
       setIsReady(true);
 
+      // aladinRef.current.addListener('AL:zoom.changed', function (e) { console.log('Zoom changed', e); });
+      // aladinRef.current.addListener('AL:HiPSLayer.added', function (e) { console.log('Hips added', e); });
+      // aladinRef.current.addListener('AL:HiPSLayer.changed', function (e) { console.log('Hips changed', e); });
+      // aladinRef.current.addListener('AL:HiPSLayer.swap', function (e) { console.log('Hips swaped', e); });
 
-      // Adiciona imagem do DES DR2 (pública)
-      const des_dr2 = aladinRef.current.createImageSurvey(
-        "DES_DR2_IRG_LIneA",
-        "DES DR2 IRG at LIneA",
-        "https://datasets.linea.org.br/data/releases/des/dr2/images/hips/",
-        "equatorial",
-      );
-      aladinRef.current.setImageSurvey(des_dr2, {
-        // imgFormat: 'hips',
-        requestCredentials: 'include',
-        requestMode: 'cors',
+      // Evento disparado toda vez que uma imagem HIPS é selecionada ou alterada
+      aladinRef.current.addListener('AL:HiPSLayer.added', () => {
+        // console.log('Survey changed');
+        const currentSurvey = aladinRef.current.getBaseImageLayer();
+        if (currentSurvey) {
+          setCurrentSurveyId(currentSurvey.id);
+        }
       });
 
-      // Exemplo de catálogo HiPS (público)
-      const des_dr2_cat = A.catalogHiPS(
-        'https://datasets.linea.org.br/data/releases/des/dr2/catalogs/hips/',
-        {
-          name: 'DES DR2',
-          onClick: 'showTable',
-          color: '#33ff42',
+
+      // Adiciona as imagens HIPS
+      surveys.forEach(survey => {
+
+        // Verifica se o usuário tem acesso ao survey
+        if (survey.requireGroup && !userGroups.includes(survey.requireGroup)) {
+          // console.warn(`User does not have access to survey: ${survey.name}`);
+          return; // Não adiciona o survey se o usuário não tiver acesso
         }
-      );
-      des_dr2_cat.hide()
-      aladinRef.current.addCatalog(des_dr2_cat);
-      catalogsRef.current['des_dr2'] = des_dr2_cat;
 
-      // Adiciona HIPScat LSST DP0.2 (privado)
-      const lsst_dp02_cat = A.catalogHiPS(
-        'https://datasets.linea.org.br/data/releases/des/dr2/catalogs/hips/',
-        {
-          name: 'LSST DP0.2',
-          onClick: 'showTable',
-          color: '#2BC7EE',
+        const hips_survey = aladinRef.current.createImageSurvey(survey.id, survey.name, survey.url, survey.cooFrame);
 
+        aladinRef.current.setImageSurvey(hips_survey, survey.options || {});
+
+        surveysRef.current[survey.id] = hips_survey;
+        // console.log(`${survey.name} HIPS IMAGE added`);
+      })
+
+      // Adiciona os catálogos HiPScat
+      catalogs.forEach(cat => {
+        if (cat.requireGroup && !userGroups.includes(cat.requireGroup)) {
+          // console.warn(`User does not have access to catalog: ${cat.name}`);
+          return; // Não adiciona o catálogo se o usuário não tiver acesso
         }
-      );
-      lsst_dp02_cat.hide()
-      aladinRef.current.addCatalog(lsst_dp02_cat);
-      catalogsRef.current['lsst_dp02'] = lsst_dp02_cat;
-
-      // Verifica grupos para liberar acesso privado
-      console.log("User groups:", userGroups);
-      if (userGroups.includes('dp02')) {
-        const lsst_dp02 = aladinRef.current.createImageSurvey(
-          "LSST_DP02_IRG_LIneA",
-          "LSST DP0.2 IRG at LIneA",
-          "https://skyviewer-dev.linea.org.br/data/releases/lsst/dp02/images/hips/",
-          "equatorial",
-        );
-        aladinRef.current.setImageSurvey(lsst_dp02, {
-          // imgFormat: 'hips',
-          requestCredentials: 'include',
-          requestMode: 'cors',
+        const hips_cat = A.catalogHiPS(cat.url, {
+          name: cat.name,
+          onClick: 'showTable',
+          ...cat.options,
         });
-        console.log("LSST DP0.2 IRG HIPS IMAGE added");
-      }
 
+        hips_cat.hide(); // Esconde o catálogo inicialmente
+        aladinRef.current.addCatalog(hips_cat);
+        catalogsRef.current[cat.id] = hips_cat;
+        // console.log(`${cat.name} HiPS catalog added`);
+      })
     });
 
     return () => {
@@ -103,16 +161,8 @@ export function useAladin(aladinParams = {}, userGroups = []) {
     aladinRef.current?.gotoObject(target);
   }, []);
 
-  const setSurvey = useCallback((survey) => {
+  const setImageSurvey = useCallback((survey) => {
     aladinRef.current?.setImageSurvey(survey);
-  }, []);
-
-  const createSurvey = useCallback((id, name, url, frame = 'equatorial', options = {}) => {
-    return aladinRef.current?.createImageSurvey(id, name, url, frame, options);
-  }, []);
-
-  const addCatalog = useCallback((catalog) => {
-    aladinRef.current?.addCatalog(catalog);
   }, []);
 
   const toggleCatalogVisibility = useCallback((id, visible) => {
@@ -120,12 +170,8 @@ export function useAladin(aladinParams = {}, userGroups = []) {
     if (!catalog) return;
     if (visible) {
       catalog.show();
-      console.log(`Catalog ${id} is now visible`);
-      console.log(catalog);
     } else {
       catalog.hide();
-      console.log(`Catalog ${id} is now hidden`);
-      console.log(catalog);
     }
   }, []);
 
@@ -141,13 +187,13 @@ export function useAladin(aladinParams = {}, userGroups = []) {
   return {
     containerRef,
     aladinRef,
+    surveysRef,
     catalogsRef,
     isReady, // Importante: indica se o Aladin está pronto
+    currentSurveyId, // ID do survey atual
     setFoV,
     setTarget,
-    setSurvey,
-    createSurvey,
-    addCatalog,
+    setImageSurvey,
     toggleCatalogVisibility,
     addMarker,
   };

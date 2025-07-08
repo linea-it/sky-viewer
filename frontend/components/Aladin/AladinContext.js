@@ -8,13 +8,13 @@ import { createContext, useContext } from 'react';
 export const AladinContext = createContext({
   containerRef: null,
   aladinRef: null,
+  surveysRef: {},
   catalogsRef: {},
   isReady: false,
+  currentSurveyId: null,
   setFoV: () => { },
   setTarget: () => { },
-  setSurvey: () => { },
-  createSurvey: () => { },
-  addCatalog: () => { },
+  setImageSurvey: () => { },
   toggleCatalogVisibility: () => { },
   addMarker: () => { },
 });

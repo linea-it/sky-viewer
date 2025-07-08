@@ -17,6 +17,7 @@ export default function Aladin({ userGroups = [] }) {
         showCooGridControl: true,
         showContextMenu: true,
         showSettingsControl: true,
+        reticleColor: '#41b332'
       }}
       userGroups={userGroups}
     >
@@ -30,7 +31,6 @@ export default function Aladin({ userGroups = [] }) {
         </div>
         <div style={{
           width: '300px',
-          // padding: '1rem', 
           background: '#eee'
         }}>
           <Controls />
