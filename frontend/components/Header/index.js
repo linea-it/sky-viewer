@@ -37,11 +37,6 @@ export default function Header() {
       target: '_blank',
     },
     {
-      description: 'Monitoring',
-      href: 'https://www.linea.org.br/grafana/',
-      target: '_blank',
-    },
-    {
       description: 'Contact',
       href: 'https://scienceplatform-dev.linea.org.br/lsp/contact',
       target: '_blank',
