@@ -6,6 +6,9 @@ import Controls from '@/components/Aladin/Controls';
 export default function Aladin({ userGroups = [] }) {
   return (
     <AladinProvider
+      // Aladin Lite options
+      // See available options at:
+      // https://cds-astro.github.io/aladin-lite/global.html#AladinOptions
       aladinParams={{
         fov: 1.5,
         target: "04 08 35.53 -37 06 27.6",
@@ -17,7 +20,10 @@ export default function Aladin({ userGroups = [] }) {
         showCooGridControl: true,
         showContextMenu: true,
         showSettingsControl: true,
-        reticleColor: '#41b332'
+        reticleColor: '#00ff04',
+        selector: {
+          color: '#00ff04' // Cor do campo de busca, OBS não funcionou por parametro a cor está hardcoded no css .aladin-input-text.search.
+        }
       }}
       userGroups={userGroups}
     >

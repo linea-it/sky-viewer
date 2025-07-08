@@ -141,6 +141,12 @@ export function useAladin(aladinParams = {}, userGroups = []) {
       })
     });
 
+    console.log(aladinRef)
+
+
+
+
+
     return () => {
       isCancelled = true;
       if (containerRef.current) {
