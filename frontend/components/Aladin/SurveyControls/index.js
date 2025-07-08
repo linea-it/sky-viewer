@@ -11,7 +11,7 @@ export default function SurveyControls() {
 
   return (
     <Stack spacing={2}>
-      <Typography variant="h6">Surveys</Typography>
+      <Typography variant="h6">Images</Typography>
       <List
         sx={{
           width: '100%',
