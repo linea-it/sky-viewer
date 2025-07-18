@@ -13,6 +13,7 @@ import ListItemText from '@mui/material/ListItemText';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import LoggedUser from '@/components/LoggedUser';
+import Chip from '@mui/material/Chip';
 import { useAuth } from '@/contexts/AuthContext';
 
 
@@ -95,7 +96,7 @@ export default function Header() {
             ))}
           </List>
           <Box sx={{ flexGrow: 1 }} />
-
+          <Chip label="Beta" variant="outlined" color="warning" size="small" />
           {user && (
             <LoggedUser username={user?.username} />
           )}
