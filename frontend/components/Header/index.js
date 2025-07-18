@@ -95,8 +95,8 @@ export default function Header() {
               </ListItem>
             ))}
           </List>
-          <Box sx={{ flexGrow: 1 }} />
           <Chip label="Beta" variant="outlined" color="warning" size="small" />
+          <Box sx={{ flexGrow: 1 }} />
           {user && (
             <LoggedUser username={user?.username} />
           )}
