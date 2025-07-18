@@ -12,7 +12,7 @@ export default function Aladin({ userGroups = [] }) {
       aladinParams={{
         fov: 1.5,
         // target: "04 08 35.53 -37 06 27.6", // Coordenadas DES. 
-        target: "12 24 00.54 +07 30 11.9",
+        target: "12 26 53.27 +08 56 49.0",
         projection: "AIT",
         showGotoControl: true,
         showFullscreenControl: true,
