@@ -21,8 +21,7 @@ mkdir -p skyviewer skyviewer/logs skyviewer/data/redis skyviewer/data/tmp skyvie
 && cp skyviewer_temp/compose/production/nginx-proxy.conf skyviewer/nginx-proxy.conf
 && rm -rf skyviewer_temp \
 && cd skyviewer \
-&& docker compose pull frontend \
-&& docker compose up -d
+&& docker compose pull
 ```
 
 Generate SAML2 Certificates
@@ -34,8 +33,8 @@ cd certificates \
 && openssl x509 -req -days 365 -in mycert.csr -signkey mykey.key -out mycert.crt \
 && cp mykey.key mykey.pem \
 && cp mycert.crt mycert.pem \
-&& cd ..
-&& chmod -R go+r certificates \
+&& cd .. \
+&& chmod -R go+r certificates
 ```
 
 Edit .env for secrets, users and passwords.
