@@ -14,6 +14,7 @@ Copy files and create directories
 
 ```bash
 mkdir -p skyviewer skyviewer/logs skyviewer/data/redis skyviewer/data/tmp skyviewer/certificates \
+&& chmod -R g+w skyviewer/logs skyviewer/data \
 && git clone https://github.com/linea-it/sky-viewer.git skyviewer_temp \
 && cp skyviewer_temp/compose/production/docker-compose.production.yml skyviewer/docker-compose.yml \ 
 && cp skyviewer_temp/compose/production/env_template skyviewer/.env \ 
@@ -34,6 +35,7 @@ cd certificates \
 && cp mykey.key mykey.pem \
 && cp mycert.crt mycert.pem \
 && cd ..
+&& chmod -R go+r certificates \
 ```
 
 Edit .env for secrets, users and passwords.
