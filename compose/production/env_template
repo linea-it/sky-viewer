@@ -1,0 +1,44 @@
+# Docker image tag
+IMAGE_TAG=latest
+
+# PORT
+WEB_PORT=8087
+
+# General
+# ------------------------------------------------------------------------------
+DJANGO_SETTINGS_MODULE=config.settings.production
+DJANGO_SECRET_KEY=hIIbCQezMLys5Ya2Flyx2NDdrs4ZG6DA2pLDu8kKPgtjP7xx6D1m8yccSD6zX6Br
+DJANGO_ALLOWED_HOSTS=.skyviewer.linea.org.br
+DJANGO_UWSGI_WORKER_PROCESSES=4
+DJANGO_UWSGI_WORKER_THREADS=2
+
+# Databases
+DATABASE_URL=postgres://<POSTGRES_USER>:<POSTGRES_PASSWORD>@<POSTGRES_HOST>:<POSTGRES_PORT>/<POSTGRES_DB>
+
+
+# Redis
+# ------------------------------------------------------------------------------
+REDIS_URL=redis://redis:6379/0
+
+# Celery
+# ------------------------------------------------------------------------------
+CELERY_BROKER_URL=$REDIS_URL
+
+# Flower
+CELERY_FLOWER_USER=skyviewer
+CELERY_FLOWER_PASSWORD=<FLOWER_PASSWORD>
+
+# ------------------------------------------------------------------------------
+# LIneA
+# ------------------------------------------------------------------------------
+ENVIRONMENT_NAME=production
+BASE_HOST=https://skyviewer.linea.org.br
+
+#SAML2
+# ------------------------------------------------------------------------------
+# SATOSA PRODUCTION
+#LINEA_LOGIN_URL=$BASE_HOST/saml2/login/?idp=https://satosa.linea.org.br/linea/proxy/aHR0cHM6Ly9jaWxvZ29uLm9yZw==
+# SATOSA DEVELOPMENT
+LINEA_LOGIN_URL=$BASE_HOST/saml2/login/?idp=https://satosa-dev.linea.org.br/linea_saml_mirror/proxy/aHR0cHM6Ly9jaWxvZ29uLm9yZw==
+
+RUBIN_LOGIN_URL=$BASE_HOST/saml2/login/?idp=https://satosa-dev.linea.org.br/linea_saml_mirror/proxy/aHR0cHM6Ly9kYXRhLmxzc3QuY2xvdWQ=&next=/
