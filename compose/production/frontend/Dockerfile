@@ -16,7 +16,7 @@ FROM base AS builder
 WORKDIR /app
 COPY --from=dependencies /app/node_modules /app/node_modules
 COPY ./frontend /app
-RUN yarn run build
+RUN yarn build
 
 FROM base AS runner
 WORKDIR /app
@@ -25,5 +25,5 @@ RUN mkdir -p /app/.next/cache && chmod -R 777 /app/.next/cache
 RUN yarn global add serve
 
 EXPOSE 3000
-# CMD ["yarn", "start"]
-CMD ["yarn", "serve", "-s", "build"]
+CMD ["yarn", "start"]
+# CMD ["serve", "-s", "build"]
