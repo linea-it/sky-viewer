@@ -14,6 +14,8 @@ POSTGRES_PASSWORD=<POSTGRES_PASSWORD>
 
 # General
 # ------------------------------------------------------------------------------
+DJANGO_DEBUG=False
+DJANGO_LOG_LEVEL=INFO
 DJANGO_SETTINGS_MODULE=config.settings.production
 DJANGO_SECRET_KEY=hIIbCQezMLys5Ya2Flyx2NDdrs4ZG6DA2pLDu8kKPgtjP7xx6D1m8yccSD6zX6Br
 DJANGO_ALLOWED_HOSTS=.skyviewer.linea.org.br
@@ -45,8 +47,5 @@ BASE_HOST=https://skyviewer.linea.org.br
 #SAML2
 # ------------------------------------------------------------------------------
 # SATOSA PRODUCTION
-#LINEA_LOGIN_URL=$BASE_HOST/saml2/login/?idp=https://satosa.linea.org.br/linea/proxy/aHR0cHM6Ly9jaWxvZ29uLm9yZw==
-# SATOSA DEVELOPMENT
-LINEA_LOGIN_URL=$BASE_HOST/saml2/login/?idp=https://satosa-dev.linea.org.br/linea_saml_mirror/proxy/aHR0cHM6Ly9jaWxvZ29uLm9yZw==
-
-RUBIN_LOGIN_URL=$BASE_HOST/saml2/login/?idp=https://satosa-dev.linea.org.br/linea_saml_mirror/proxy/aHR0cHM6Ly9kYXRhLmxzc3QuY2xvdWQ=&next=/
+LINEA_LOGIN_URL=$BASE_HOST/saml2/login/?idp=https://satosa.linea.org.br/linea/proxy/aHR0cHM6Ly9jaWxvZ29uLm9yZw==
+RUBIN_LOGIN_URL=$BASE_HOST/saml2/login/?idp=https://satosa.linea.org.br/linea/proxy/aHR0cHM6Ly9kYXRhLmxzc3QuY2xvdWQv&next=/
