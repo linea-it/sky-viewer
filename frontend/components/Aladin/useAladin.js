@@ -20,18 +20,11 @@ export function useAladin(aladinParams = {}, userGroups = []) {
       name: "DES DR2 IRG at LIneA",
       url: "https://datasets.linea.org.br/data/releases/des/dr2/images/hips/",
       cooFrame: "equatorial",
+      // HipsOptions: https://cds-astro.github.io/aladin-lite/global.html#HiPSOptions
       options: {
         requestCredentials: 'include',
         requestMode: 'cors',
-      }
-    },
-    // Rubin First Look (pública)
-    {
-      id: "RUBIN_FIRST_LOOK_UGRI",
-      name: "RUBIN FIRST LOOK",
-      url: "https://images.rubinobservatory.org/hips/asteroids/color_ugri/",
-      cooFrame: "equatorial",
-      options: {}
+      },
     },
     // Adiciona imagem do LSST DP0.2 (privada, requer grupo 'dp02')
     {
@@ -44,6 +37,14 @@ export function useAladin(aladinParams = {}, userGroups = []) {
         requestMode: 'cors',
       },
       requireGroup: 'dp02', // Grupo necessário para acesso
+    },
+    // Rubin First Look (pública)
+    {
+      id: "RUBIN_FIRST_LOOK_UGRI",
+      name: "RUBIN FIRST LOOK",
+      url: "https://images.rubinobservatory.org/hips/asteroids/color_ugri/",
+      cooFrame: "equatorial",
+      options: {},
     }]
 
   // catálogos HiPScat
@@ -86,6 +87,12 @@ export function useAladin(aladinParams = {}, userGroups = []) {
     }
   ]
 
+  const defaultTargets = {
+    "DES_DR2_IRG_LIneA": "02 32 44.09 -35 57 39.5",
+    "RUBIN_FIRST_LOOK_UGRI": "12 26 53.27 +08 56 49.0",
+    "LSST_DP02_IRG_LIneA": "04 08 29.07 -37 02 47.9"
+  }
+
   useEffect(() => {
     let isCancelled = false;
 
@@ -109,6 +116,11 @@ export function useAladin(aladinParams = {}, userGroups = []) {
         const currentSurvey = aladinRef.current.getBaseImageLayer();
         if (currentSurvey) {
           setCurrentSurveyId(currentSurvey.id);
+          const target = defaultTargets[currentSurvey.id];
+          if (target) {
+            // Goto the target of the current survey
+            aladinRef.current.gotoObject(target);
+          }
         }
       });
 
@@ -148,12 +160,6 @@ export function useAladin(aladinParams = {}, userGroups = []) {
         // console.log(`${cat.name} HiPS catalog added`);
       })
     });
-
-    console.log(aladinRef)
-
-
-
-
 
     return () => {
       isCancelled = true;
