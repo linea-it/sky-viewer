@@ -356,6 +356,10 @@ SAML_CONFIG = {
                 "cert": None,
             },
             {
+                "url": "https://www.linea.org.br/static/metadata/satosa-prod-frontend-rubin.xml",
+                "cert": None,
+            },
+            {
                 "url": "https://www.linea.org.br/static/metadata/satosa-dev-frontend-cilogon.xml",
                 "cert": None,
             },
@@ -363,10 +367,6 @@ SAML_CONFIG = {
                 "url": "https://www.linea.org.br/static/metadata/satosa-dev-frontend-rubin.xml",
                 "cert": None,
             },
-            {
-                "url": "https://www.linea.org.br/static/metadata/satosa-prod-frontend-rubin.xml",
-                "cert": None,
-            },            
         ],
     },
     # Configurado como 1 para fornecer informações de debug
