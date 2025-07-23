@@ -48,4 +48,7 @@ BASE_HOST=https://skyviewer.linea.org.br
 # ------------------------------------------------------------------------------
 # SATOSA PRODUCTION
 LINEA_LOGIN_URL=$BASE_HOST/saml2/login/?idp=https://satosa.linea.org.br/linea/proxy/aHR0cHM6Ly9jaWxvZ29uLm9yZw==
+LINEA_REGISTER_URL=https://register.linea.org.br/Shibboleth.sso/Login?SAMLDS=1&target=https://register.linea.org.br/registry/co_petitions/start/coef:155&entityID=https://satosa.linea.org.br/linea/proxy/aHR0cHM6Ly9jaWxvZ29uLm9yZw==
+
 RUBIN_LOGIN_URL=$BASE_HOST/saml2/login/?idp=https://satosa.linea.org.br/linea/proxy/aHR0cHM6Ly9kYXRhLmxzc3QuY2xvdWQv&next=/
+RUBIN_REGISTER_URL=https://register.linea.org.br/Shibboleth.sso/Login?SAMLDS=1&target=https://register.linea.org.br/registry/co_petitions/start/coef:189&entityID=https://satosa.linea.org.br/linea/proxy/aHR0cHM6Ly9kYXRhLmxzc3QuY2xvdWQv
