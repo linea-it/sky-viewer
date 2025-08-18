@@ -16,7 +16,7 @@ def saml2_template_failure(request, exception=None, status=403, **kwargs):
     needs_registration = request.session.get('needs_registration', False)
     user_status = request.session.get('user_status')
 
-    logger.info(f"idp_name: {idp_name}")
+    logger.info(f"idp_name: {idp_name} type: {type(idp_name)}")
     logger.info(f"needs_registration: {needs_registration}")
     logger.info(f"user_status: {user_status}")
 

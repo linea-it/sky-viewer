@@ -36,7 +36,7 @@ export function useAladin(aladinParams = {}, userGroups = []) {
         requestCredentials: 'include',
         requestMode: 'cors',
       },
-      requireGroup: 'dp02', // Grupo necessário para acesso
+      requireGroup: 'lsst_dp0.2', // Grupo necessário para acesso
     },
     // Rubin First Look (pública)
     {
@@ -62,7 +62,7 @@ export function useAladin(aladinParams = {}, userGroups = []) {
       name: 'LSST DP0.2 at LIneA',
       url: 'https://datasets.linea.org.br/data/releases/des/dr2/catalogs/hips/', // TODO: Url temporaria, deve ser alterada para o catálogo correto
       options: { color: '#2BC7EE' },
-      requireGroup: 'dp02', // Grupo necessário para acesso
+      requireGroup: 'lsst_dp0.2', // Grupo necessário para acesso
     },
     // Adiciona Catalogos default do Aladin ( Simbad, Gaia DR3, 2MASS )
     {

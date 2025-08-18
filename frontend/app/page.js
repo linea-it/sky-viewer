@@ -21,8 +21,6 @@ export default function Home() {
       flexGrow: 1,
       minHeight: 'calc(100vh - 64px)'
     }}>
-      {/* SE tiver mais componentes tipo menu de escolha dos releases vai ficar aqui.*/}
-      {/* {typeof window !== "undefined" && (<Aladin />)} */}
       {isClient ? <Aladin userGroups={user?.groups || []} /> : 'Loading'}
     </Box>
   );

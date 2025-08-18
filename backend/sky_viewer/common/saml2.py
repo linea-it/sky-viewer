@@ -40,6 +40,7 @@ class LineaSaml2Backend(Saml2Backend):
         attributes = self.clean_attributes(session_info["ava"], idp_entityid)
 
         idp_name = attributes.get('schacProjectMembership', None)
+        logger.info(f"IDP NAME TYPE: {type(idp_name)}")
         if idp_name is isinstance(idp_name, list):
             idp_name = idp_name[0]
 
