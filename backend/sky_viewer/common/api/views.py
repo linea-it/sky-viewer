@@ -77,7 +77,7 @@ def nginx_serve_protected_hips(request):
     # Identifie release from the original URI
     if original_uri.find('/lsst/dp02/') > -1:
         # Check if the user has the required group membership for HIPS images
-        if not request.user.groups.filter(name='dp02').exists():
+        if not request.user.groups.filter(name='lsst_dp0.2').exists():
             logger.warning(f"User {request.user.username} does not have access to DP02 HIPS images.")
             return HttpResponseForbidden({"message":"User does not have access to DP02 HIPS images."}, content_type="application/json", status=403)
     
