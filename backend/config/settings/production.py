@@ -297,10 +297,10 @@ LOGIN_REDIRECT_URL = "/"
 
 SAML_ATTRIBUTE_MAPPING = {
     "eduPersonUniqueId": ("username",),
-    "givenName": ("first_name",),
+    "cn": ("first_name",),
     "sn": ("last_name",),
     "email": ("email",),
-    "isMemberOf": ("name",),
+    # "isMemberOf": ("name",),
 }
 
 SAML_CONFIG = {
