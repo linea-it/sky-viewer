@@ -3,8 +3,8 @@
 import { AladinContext } from './AladinContext';
 import { useAladin } from './useAladin';
 
-export function AladinProvider({ children, aladinParams = {}, userGroups = [] }) {
-  const aladin = useAladin(aladinParams, userGroups);
+export function AladinProvider({ children, aladinParams = {}, userGroups = [], baseHost }) {
+  const aladin = useAladin(aladinParams, userGroups, baseHost);
 
   return (
     <AladinContext.Provider value={aladin}>

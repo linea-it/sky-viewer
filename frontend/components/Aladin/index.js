@@ -3,7 +3,7 @@
 import { AladinProvider } from './AladinProvider';
 import AladinViewer from './AladinViewer';
 import Controls from '@/components/Aladin/Controls';
-export default function Aladin({ userGroups = [] }) {
+export default function Aladin({ userGroups = [], baseHost }) {
   return (
     <AladinProvider
       // Aladin Lite options
@@ -27,6 +27,7 @@ export default function Aladin({ userGroups = [] }) {
         }
       }}
       userGroups={userGroups}
+      baseHost={baseHost}
     >
       <div style={{
         display: 'flex',

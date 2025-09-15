@@ -6,7 +6,7 @@ import { useAuth } from "@/contexts/AuthContext";
 const Aladin = dynamic(() => import('@/components/Aladin'), { ssr: false })
 
 export default function Home() {
-  const { user } = useAuth();
+  const { user, settings } = useAuth();
   const [isClient, setIsClient] = useState(false)
 
   useEffect(() => {
@@ -21,7 +21,7 @@ export default function Home() {
       flexGrow: 1,
       minHeight: 'calc(100vh - 64px)'
     }}>
-      {isClient ? <Aladin userGroups={user?.groups || []} /> : 'Loading'}
+      {isClient ? <Aladin userGroups={user?.groups || []} baseHost={settings?.base_host} /> : 'Loading'}
     </Box>
   );
 }

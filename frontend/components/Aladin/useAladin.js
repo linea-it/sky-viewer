@@ -5,7 +5,7 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 /**
  * Hook para controlar o Aladin Lite, aguardando a lib A estar disponível.
  */
-export function useAladin(aladinParams = {}, userGroups = []) {
+export function useAladin(aladinParams = {}, userGroups = [], baseHost) {
   const containerRef = useRef(null);
   const aladinRef = useRef(null);
   const [isReady, setIsReady] = useState(false);
@@ -30,7 +30,7 @@ export function useAladin(aladinParams = {}, userGroups = []) {
     {
       id: "LSST_DP02_IRG_LIneA",
       name: "LSST DP0.2 IRG at LIneA",
-      url: "https://skyviewer-dev.linea.org.br/data/releases/lsst/dp02/images/hips/",
+      url: `${baseHost}/data/releases/lsst/dp02/images/hips/`,
       cooFrame: "equatorial",
       options: {
         requestCredentials: 'include',
@@ -56,14 +56,14 @@ export function useAladin(aladinParams = {}, userGroups = []) {
       url: 'https://datasets.linea.org.br/data/releases/des/dr2/catalogs/hips/',
       options: { color: '#33ff42' }
     },
-    // Adiciona catálogo LSST DP0.2 (privado)
-    {
-      id: 'lsst_dp02',
-      name: 'LSST DP0.2 at LIneA',
-      url: 'https://datasets.linea.org.br/data/releases/des/dr2/catalogs/hips/', // TODO: Url temporaria, deve ser alterada para o catálogo correto
-      options: { color: '#2BC7EE' },
-      requireGroup: 'lsst_dp0.2', // Grupo necessário para acesso
-    },
+    // // Adiciona catálogo LSST DP0.2 (privado)
+    // {
+    //   id: 'lsst_dp02',
+    //   name: 'LSST DP0.2 at LIneA',
+    //   url: 'https://datasets.linea.org.br/data/releases/des/dr2/catalogs/hips/', // TODO: Url temporaria, deve ser alterada para o catálogo correto
+    //   options: { color: '#2BC7EE' },
+    //   requireGroup: 'lsst_dp0.2', // Grupo necessário para acesso
+    // },
     // Adiciona Catalogos default do Aladin ( Simbad, Gaia DR3, 2MASS )
     {
       id: 'simbad',
