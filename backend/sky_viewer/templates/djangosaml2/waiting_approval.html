@@ -1,5 +1,5 @@
 {% load i18n %}
-
+{% load static %}
 <!DOCTYPE html>
 <html lang="en">
 
@@ -129,7 +129,7 @@
         <div class="row" style="align-items: center;">
             <div class="col-md-4" style="align-content: center;">
                 <div class="card-header">
-                    <img src="../../static/images/linea-logo.png" alt="Description of the image" style="width: 70%;">
+                    <img src="{% static 'images/linea-logo.png' %}" alt="LIneA Logo" style="width: 70%;">
                 </div>
                 <div class="card-header">
                     <h3 style="margin-bottom: 3rem; margin-top: 2rem; align-content: center; text-align: center;">
@@ -146,10 +146,12 @@
                     Your registration is currently under review.
                 </p>
                 <p class="text" style="margin-top: 0;">
-                    All new registrations are subject to an approval process which takes place during business hours and may require up to one business day.
+                    All new registrations are subject to an approval process which takes place during business hours and
+                    may require up to one business day.
                 </p>
                 <p class="text" style="margin-top: 0;">
-                    For any other assistance, please <a href="mailto:helpdesk@linea.org.br" target="_blank">contact our helpdesk</a>.
+                    For any other assistance, please <a href="mailto:helpdesk@linea.org.br" target="_blank">contact our
+                        helpdesk</a>.
                 </p>
             </div>
         </div>

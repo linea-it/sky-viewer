@@ -238,7 +238,7 @@ SPECTACULAR_SETTINGS["SERVERS"] = [
 # ------------------------------------------------------------------------------
 
 # Qualquer view que requer um usuário autenticado deve redirecionar o navegador para esta url
-LOGIN_URL = "/api/login"
+LOGIN_URL = "/api/login/"
 # Urls for login with SAML2/CILogon
 # URL_CILOGON example: https://skyviewer.linea.org.br/saml2/login/?idp=https://satosa.linea.org.br/linea/proxy/aHR0cHM6Ly9jaWxvZ29uLm9yZw==
 LINEA_LOGIN_URL = env("LINEA_LOGIN_URL")
