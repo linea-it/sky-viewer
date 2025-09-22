@@ -39,17 +39,17 @@ export default function Header() {
     },
     {
       description: 'Contact',
-      href: 'https://scienceplatform-dev.linea.org.br/lsp/contact',
+      href: settings?.is_dev ? 'https://scienceplatform-dev.linea.org.br/lsp/contact' : 'https://scienceplatform.linea.org.br/lsp/contact',
       target: '_blank',
     },
     {
       description: 'LSP',
-      href: 'https://scienceplatform-dev.linea.org.br/lsp',
+      href: settings?.is_dev ? 'https://scienceplatform-dev.linea.org.br/lsp' : 'https://scienceplatform.linea.org.br/lsp',
       target: '_blank',
     },
     {
       description: 'IDAC',
-      href: 'https://scienceplatform-dev.linea.org.br/idac',
+      href: settings?.is_dev ? 'https://scienceplatform-dev.linea.org.br/idac' : 'https://scienceplatform.linea.org.br/idac',
       target: '_blank',
     }
   ];
