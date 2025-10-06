@@ -19,6 +19,8 @@ if READ_DOT_ENV_FILE:
 # ------------------------------------------------------------------------------
 # https://docs.djangoproject.com/en/dev/ref/settings/#debug
 DEBUG = env.bool("DJANGO_DEBUG", False)
+LOG_LEVEL = env.bool("DJANGO_LOG_LEVEL", "INFO")
+LOG_DIR = "/logs"
 # Local time zone. Choices are
 # http://en.wikipedia.org/wiki/List_of_tz_zones_by_name
 # though not all of them may be available with every OS.
@@ -86,7 +88,7 @@ THIRD_PARTY_APPS = [
 
 LOCAL_APPS = [
     "sky_viewer.users",
-    # Your stuff: custom apps go here
+    "sky_viewer.common",
 ]
 # https://docs.djangoproject.com/en/dev/ref/settings/#installed-apps
 INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
@@ -191,6 +193,7 @@ TEMPLATES = [
                 "django.template.context_processors.tz",
                 "django.contrib.messages.context_processors.messages",
                 "sky_viewer.users.context_processors.allauth_settings",
+                "django_settings_export.settings_export",
             ],
         },
     },
@@ -211,9 +214,10 @@ FIXTURE_DIRS = (str(APPS_DIR / "fixtures"),)
 # SECURITY
 # ------------------------------------------------------------------------------
 # https://docs.djangoproject.com/en/dev/ref/settings/#session-cookie-httponly
-SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_HTTPONLY = False
 # https://docs.djangoproject.com/en/dev/ref/settings/#csrf-cookie-httponly
-CSRF_COOKIE_HTTPONLY = True
+CSRF_COOKIE_HTTPONLY = False
+CSRF_COOKIE_NAME = "skyviewer.csrftoken"
 # https://docs.djangoproject.com/en/dev/ref/settings/#x-frame-options
 X_FRAME_OPTIONS = "DENY"
 
@@ -232,7 +236,7 @@ EMAIL_TIMEOUT = 5
 # Django Admin URL.
 ADMIN_URL = "admin/"
 # https://docs.djangoproject.com/en/dev/ref/settings/#admins
-ADMINS = [("""Glauber Costa Vila Verde""", "glauber.costa@linea.org.br")]
+ADMINS = [("""LIneA Team""", "helpdesk@linea.org.br")]
 # https://docs.djangoproject.com/en/dev/ref/settings/#managers
 MANAGERS = ADMINS
 # https://cookiecutter-django.readthedocs.io/en/latest/settings.html#other-environment-settings
@@ -261,6 +265,9 @@ LOGGING = {
     },
     "root": {"level": "INFO", "handlers": ["console"]},
 }
+
+REDIS_URL = env("REDIS_URL", default="redis://redis:6379/0")
+REDIS_SSL = REDIS_URL.startswith("rediss://")
 
 # Celery
 # ------------------------------------------------------------------------------
@@ -300,9 +307,9 @@ CELERY_TASK_SEND_SENT_EVENT = True
 # ------------------------------------------------------------------------------
 ACCOUNT_ALLOW_REGISTRATION = env.bool("DJANGO_ACCOUNT_ALLOW_REGISTRATION", True)
 # https://docs.allauth.org/en/latest/account/configuration.html
-ACCOUNT_AUTHENTICATION_METHOD = "username"
+ACCOUNT_LOGIN_METHODS = {"username"}
 # https://docs.allauth.org/en/latest/account/configuration.html
-ACCOUNT_EMAIL_REQUIRED = True
+ACCOUNT_SIGNUP_FIELDS = ["email*", "username*", "password1*", "password2*"]
 # https://docs.allauth.org/en/latest/account/configuration.html
 ACCOUNT_EMAIL_VERIFICATION = "mandatory"
 # https://docs.allauth.org/en/latest/account/configuration.html
@@ -328,6 +335,13 @@ REST_FRAMEWORK = {
     ),
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "DEFAULT_FILTER_BACKENDS": [
+        "django_filters.rest_framework.DjangoFilterBackend",
+        "rest_framework.filters.SearchFilter",
+        "rest_framework.filters.OrderingFilter",
+    ],
+    "DEFAULT_PAGINATION_CLASS": "common.pagination.CustomPageNumberPagination",
+    "PAGE_SIZE": 100,
 }
 
 # django-cors-headers - https://github.com/adamchainz/django-cors-headers#setup
@@ -342,5 +356,38 @@ SPECTACULAR_SETTINGS = {
     "SERVE_PERMISSIONS": ["rest_framework.permissions.IsAdminUser"],
     "SCHEMA_PATH_PREFIX": "/api/",
 }
-# Your stuff...
+
+# LINEA Settings
 # ------------------------------------------------------------------------------
+ENVIRONMENT_NAME = env("ENVIRONMENT_NAME", default="development").lower()
+# Complete URL of the production server with protocol and port
+BASE_HOST = env("BASE_HOST", default="http://localhost")
+# URL de login utilizada pelo frontend. 
+# Em dev: /admin/login/?next=/
+# Em produção: /api/login/
+LOGIN_URL = "/admin/login/?next=/"
+# LOGIN_URL = "/api/login/"
+LOGOUT_URL = "/api/logout/"
+
+# Urls for login with SAML2/CILogon
+# URL_CILOGON example: https://skyviewer.linea.org.br/saml2/login/?idp=https://satosa.linea.org.br/linea/proxy/aHR0cHM6Ly9jaWxvZ29uLm9yZw==
+LINEA_LOGIN_URL = env("LINEA_LOGIN_URL", default="/admin/login/?next=/")
+RUBIN_LOGIN_URL = env("RUBIN_LOGIN_URL", default="/admin/login/?next=/")
+
+# Url de registro para os diferentes idps.
+LINEA_REGISTER_URL = env("LINEA_REGISTER_URL", default="https://register-dev.linea.org.br/Shibboleth.sso/Login?SAMLDS=1&target=https://register-dev.linea.org.br/registry/co_petitions/start/coef:155&entityID=https://satosa.linea.org.br/linea/proxy/aHR0cHM6Ly9jaWxvZ29uLm9yZw==")
+RUBIN_REGISTER_URL = env("RUBIN_REGISTER_URL", default="https://register-dev.linea.org.br/Shibboleth.sso/Login?SAMLDS=1&target=https://register-dev.linea.org.br/registry/co_petitions/start/coef:231&entityID=https://satosa-dev.linea.org.br/linea_saml_mirror/proxy/aHR0cHM6Ly9kYXRhLmxzc3QuY2xvdWQ=")
+
+# Lista de grupos internos do sistema.
+# Esses grupos são gerenciados no django admin.
+# Quando o usuario faz login pelo saml2 esses grupos não serão removidos. 
+INTERNAL_GROUPS = []
+
+SETTINGS_EXPORT = [
+    "BASE_HOST",
+    "LOGOUT_URL",
+    "LINEA_LOGIN_URL",
+    "LINEA_REGISTER_URL",
+    "RUBIN_LOGIN_URL",
+    "RUBIN_REGISTER_URL"
+]

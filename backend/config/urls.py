@@ -9,6 +9,7 @@ from django.views.generic import TemplateView
 from drf_spectacular.views import SpectacularAPIView
 from drf_spectacular.views import SpectacularSwaggerView
 from rest_framework.authtoken.views import obtain_auth_token
+from sky_viewer.common.api import views as CommonViews
 
 urlpatterns = [
     # path("", TemplateView.as_view(template_name="pages/home.html"), name="home"),
@@ -17,13 +18,22 @@ urlpatterns = [
     #     TemplateView.as_view(template_name="pages/about.html"),
     #     name="about",
     # ),
+    # User management
+    # path("/users/", include("sky_viewer.users.urls", namespace="users")),
+    # path("/accounts/", include("allauth.urls")),
+
     # Django Admin, use {% url 'admin:index' %}
     path(settings.ADMIN_URL, admin.site.urls),
-    # User management
-    # path("users/", include("sky_viewer.users.urls", namespace="users")),
-    # path("accounts/", include("allauth.urls")),
+
     # Your stuff: custom urls includes go here
-    # ...
+    # Auth SAML2
+    path("saml2/", include("djangosaml2.urls")),
+    path(
+        "api/login/",
+        TemplateView.as_view(template_name="pages/linea_login.html"),
+        name="login",
+    ),    
+
     # Media files
     *static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT),
 ]
@@ -32,6 +42,15 @@ urlpatterns = [
 urlpatterns += [
     # API base url
     path("api/", include("config.api_router")),
+    path("api/logout/", CommonViews.logout_user, name="logout_user"),
+    path(
+        "api/environment_settings/",
+        CommonViews.environment_settings,
+        name="environment_settings",
+    ),
+    path("api/nginx_serve_protected_hips/", CommonViews.nginx_serve_protected_hips, name="protected_hips"),
+    
+    path("api/teste/", CommonViews.teste, name="teste"),
     # DRF auth token
     path("api/auth-token/", obtain_auth_token),
     path("api/schema/", SpectacularAPIView.as_view(), name="api-schema"),

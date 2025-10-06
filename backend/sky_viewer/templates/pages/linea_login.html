@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block body %}
+
+<!-- <body
+  style="margin: 0; height: 100vh; display: flex; align-items: center; justify-content: center; background-image: url('{% static 'images/background.jpg' %}'); background-repeat: round; background-attachment: fixed; font-family: 'Roboto', sans-serif;"> -->
+
+<body
+  style="margin: 0; height: 100vh; display: flex; align-items: center; justify-content: center; font-family: 'Roboto', sans-serif;">
+  <div class="card"
+    style="background-color: #fff; position: relative; padding: 16px; margin: 32px; border-radius: 20px; border: 1px solid rgba(255, 255, 255, 0.12); box-shadow: 0px 2px 1px -1px rgba(0, 0, 0, 0.2), 0px 1px 1px 0px rgba(0, 0, 0, 0.14), 0px 1px 3px 0px rgba(0, 0, 0, 0.12);">
+    <div
+      style="display: flex; flex-wrap: nowrap; --bs-gutter-x: 1.5rem; --bs-gutter-y: 0; margin-top: calc(var(--bs-gutter-y) * -1); margin-right: calc(var(--bs-gutter-x) * -0.5); margin-left: calc(var(--bs-gutter-x) * -0.5); padding: 0 2rem;">
+      <div style="flex: 0 0 auto; width: 50%;">
+        <div style="max-width: 500px; margin: 5rem 5rem 0 0;">
+          <img src="{% static 'images/linea-logo.png' %}" alt="LIneA Logo"
+            style="max-width: 100%; height: 247px; width: 300px;" />
+        </div>
+      </div>
+
+      <div style="flex: 0 0 auto; width: 50%;">
+        <div
+          style="display: flex; flex-direction: column; justify-content: flex-start; align-items: center; margin-bottom: 12px;">
+          <h3 style="margin-bottom: 0px; margin-top: 3rem; font-weight: bold;">Welcome to</h3>
+          <h3 style="font-weight: bold;">LIneA Sky Viewer</h3>
+        </div>
+        <div
+          style="border: 0; display: inline-flex; padding: 0; position: relative; min-width: 0; flex-direction: column; vertical-align: top; margin: 10px 0; width: 100%;">
+          <a href="{{ settings.RUBIN_LOGIN_URL }}"
+            style="width: 100%; padding: 8px 16px; font-size: 14px; box-sizing: border-box; transition: background-color 250ms cubic-bezier(0.4, 0, 0.2, 1) 0ms, box-shadow 250ms cubic-bezier(0.4, 0, 0.2, 1) 0ms, border 250ms cubic-bezier(0.4, 0, 0.2, 1) 0ms; font-weight: 700; line-height: 2; border-radius: 4px; letter-spacing: 0.02857em; text-transform: uppercase; background-color: rgb(0, 119, 181); color: #fff; display: inline-block; margin-bottom: 0; text-align: center; touch-action: manipulation; cursor: pointer; border: 1px solid transparent; user-select: none; text-decoration: none; display: flex; align-items: center;">
+            <span style="margin-left: auto; margin-right: auto;">LSST Members (RSP account)</span>
+          </a>
+        </div>
+        <div
+          style="border: 0; display: inline-flex; padding: 0; position: relative; min-width: 0; flex-direction: column; vertical-align: top; margin: 10px 0; width: 100%;">
+          <a href="{{ settings.LINEA_LOGIN_URL }}"
+            style="width: 100%; padding: 8px 16px; font-size: 14px; box-sizing: border-box; transition: background-color 250ms cubic-bezier(0.4, 0, 0.2, 1) 0ms, box-shadow 250ms cubic-bezier(0.4, 0, 0.2, 1) 0ms, border 250ms cubic-bezier(0.4, 0, 0.2, 1) 0ms; font-weight: 700; line-height: 2; border-radius: 4px; letter-spacing: 0.02857em; text-transform: uppercase; background-color: rgb(0, 119, 181); color: #fff; display: inline-block; margin-bottom: 0; text-align: center; touch-action: manipulation; cursor: pointer; border: 1px solid transparent; user-select: none; text-decoration: none; display: flex; align-items: center;">
+            <span style="margin-left: auto; margin-right: auto;">General Public</span>
+          </a>
+        </div>
+
+        <p style="color: #283661; text-align: center; margin-top: 10px;">
+          New user? Register here: <a
+            href="https://docs.google.com/forms/d/e/1FAIpQLSdpPhOpFnb4zS-DwMEgYG-n6RWoBWpxKfRvzUnIr_v5ZSYmaA/viewform"
+            target="_blank" style="color: #095ce0;">English</a> or <a
+            href="https://docs.google.com/forms/d/e/1FAIpQLScQuUTV7Wc-C10gWNcznorbW5mOQlGkFAXUikd0R7JzsdgSfQ/viewform"
+            target="_blank" style="color: #095ce0;">Português</a>.
+        </p>
+      </div>
+    </div>
+
+    <div style="margin: 0 8px; max-width: 100%; text-align: justify;">
+      <p style="color: #283661; margin-top: 2rem; margin-bottom: 0rem; text-align: center;">
+        Any problem authenticating or registering? <a href="mailto:helpdesk@linea.org.br" target="_blank"
+          style="color: #095ce0;">Contact our helpdesk</a>.
+      </p>
+    </div>
+  </div>
+</body>
+{% endblock body %}

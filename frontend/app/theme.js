@@ -15,7 +15,7 @@ const theme = createTheme({
   },
   typography: {
     fontFamily: roboto.style.fontFamily,
-  },
+  }
 });
 
 export default theme;

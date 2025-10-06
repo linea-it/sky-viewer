@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install --no-install-recommends -y \
   libpq-dev
 
 # Requirements are installed here to ensure they will be cached.
-COPY ./requirements .
+COPY ./backend/requirements .
 
 # Create Python Dependency and Sub-Dependency Wheels.
 RUN pip wheel --wheel-dir /usr/src/app/wheels  \
@@ -28,14 +28,17 @@ FROM python AS python-run-stage
 ARG BUILD_ENVIRONMENT=production
 ARG APP_HOME=/app
 
+ARG USER_UID=1000
+ARG USER_GID=1000
+
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV BUILD_ENV=${BUILD_ENVIRONMENT}
 
 WORKDIR ${APP_HOME}
 
-RUN addgroup --system django \
-    && adduser --system --ingroup django django
+RUN addgroup --gid $USER_GID --system django \
+  && adduser  --uid $USER_UID --system --ingroup django django
 
 
 # Install required system dependencies
@@ -44,6 +47,21 @@ RUN apt-get update && apt-get install --no-install-recommends -y \
   libpq-dev \
   # Translations dependencies
   gettext \
+  # SAML dependencies
+  libaio-dev \
+  libsasl2-dev \
+  libldap2-dev \
+  libssl-dev \
+  xmlsec1 \
+  # other dependencies
+  unzip \
+  git \
+  zsh \
+  wget \
+  curl \
+  vim \
+  # entrypoint
+  wait-for-it \
   # cleaning up unused files
   && apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false \
   && rm -rf /var/lib/apt/lists/*
@@ -81,10 +99,12 @@ RUN chmod +x /start-flower
 
 
 # copy application code to WORKDIR
-COPY --chown=django:django . ${APP_HOME}
+COPY --chown=django:django ./backend ${APP_HOME}
 
 # make django owner of the WORKDIR directory as well.
-RUN chown -R django:django ${APP_HOME}
+RUN mkdir -p /logs /data \
+  && chown -R django:django ${APP_HOME} /data /logs \
+  && chmod -R g+w /logs /data 
 
 USER django
 

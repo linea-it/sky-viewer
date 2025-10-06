@@ -7,4 +7,23 @@ set -o nounset
 echo "Running Migrate to apply changes in database"
 python manage.py migrate
 
-exec python manage.py runserver_plus 0.0.0.0:8000
+echo "Running Collect Statics"
+python manage.py collectstatic --clear --noinput --verbosity 0
+
+echo "Running Django Compress"
+python manage.py compress
+
+# uWSGI para servir o app e ter compatibilidade com Shibboleth
+# https://uwsgi-docs.readthedocs.io/en/latest/WSGIquickstart.html
+echo "Running Django with uWSGI"
+# --module config.asgi:application \
+uwsgi \
+    --socket 0.0.0.0:8000 \
+    --wsgi-file /app/config/wsgi.py \
+    --module config.wsgi:application \
+    --buffer-size=32768 \
+    --processes=${DJANGO_UWSGI_WORKER_PROCESSES:-4} \
+    --threads=${DJANGO_UWSGI_WORKER_THREADS:-2}\
+    --http-timeout=180 \
+    --static-map /django_static=/app/staticfiles \
+    --py-autoreload=1

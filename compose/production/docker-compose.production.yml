@@ -1,0 +1,38 @@
+services:
+  backend: &django
+    image: linea/skyviewer:backend_${IMAGE_TAG:-latest}
+    group_add:
+      - "10000"
+      - "39215"
+      - "10006"
+    volumes:
+      - ./data/tmp:/data
+      - ./logs:/logs
+      - ./certificates:/app/config/certificates
+    depends_on:
+      - redis
+    env_file:
+      - .env
+    command: /start
+
+  frontend:
+    image: linea/skyviewer:frontend_${IMAGE_TAG:-latest}
+    depends_on:
+      - backend
+
+  redis:
+    image: docker.io/redis:6
+    volumes:
+      - ./data/redis:/data
+
+  nginx:
+    image: nginx:latest
+    ports:
+      - ${WEB_PORT:-8087}:80
+    volumes:
+      # Arquivo de configuração do Ngnix para este amente
+      - ./nginx-proxy.conf:/etc/nginx/conf.d/default.conf:ro
+      # Diretório onde o backend manipula arquivos, e que deve ficar acessivel ao servidor web.
+      - ./data/tmp:/var/www/data
+      # LSST DP02 Hips Images (PRIVATE)
+      - /mnt/cl/lsst/dp02/secondary/images/hips:/var/www/data/releases/lsst/dp02/images/hips

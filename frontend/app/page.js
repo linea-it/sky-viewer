@@ -1,16 +1,18 @@
 'use client';
 import Box from '@mui/material/Box';
-// import Aladin from "@/components/Aladin";
 import { useState, useEffect } from 'react'
 import dynamic from 'next/dynamic'
+import { useAuth } from "@/contexts/AuthContext";
 const Aladin = dynamic(() => import('@/components/Aladin'), { ssr: false })
 
 export default function Home() {
+  const { user, settings } = useAuth();
   const [isClient, setIsClient] = useState(false)
 
   useEffect(() => {
     setIsClient(true)
   }, [])
+
 
   return (
     // tamanho minimo do container principal deve ser
@@ -19,9 +21,7 @@ export default function Home() {
       flexGrow: 1,
       minHeight: 'calc(100vh - 64px)'
     }}>
-      {/* SE tiver mais componentes tipo menu de escolha dos releases vai ficar aqui.*/}
-      {/* {typeof window !== "undefined" && (<Aladin />)} */}
-      {isClient ? <Aladin /> : 'Loading'}
+      {isClient ? <Aladin userGroups={user?.groups || []} baseHost={settings?.base_host} /> : 'Loading'}
     </Box>
   );
 }

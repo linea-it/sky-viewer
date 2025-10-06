@@ -2,13 +2,33 @@
 # ------------------------------------------------------------------------------
 USE_DOCKER=yes
 IPYTHONDIR=/app/.ipython
+
+DJANGO_DEBUG=True
+DJANGO_SECRET_KEY=hIIbCQezMLys5Ya2Flyx2NDdrs4ZG6DA2pLDu8kKPgtjP7xx6D1m8yccSD6zX6Br
+DATABASE_URL=postgres://debug:debug@postgres:5432/sky_viewer
+
+# UWSGI
+DJANGO_UWSGI_WORKER_PROCESSES=1
+DJANGO_UWSGI_WORKER_THREADS=1
+
 # Redis
 # ------------------------------------------------------------------------------
 REDIS_URL=redis://redis:6379/0
 
-# Celery
+#Celery
 # ------------------------------------------------------------------------------
-
+CELERY_BROKER_URL=$REDIS_URL
 # Flower
 CELERY_FLOWER_USER=debug
 CELERY_FLOWER_PASSWORD=debug
+
+
+# ------------------------------------------------------------------------------
+# LIneA
+# ------------------------------------------------------------------------------
+ENVIRONMENT_NAME=development
+BASE_HOST=http://localhost
+
+# Urls de login SAML/CILogon
+LINEA_LOGIN_URL=$BASE_HOST/saml2/login/?idp=https://satosa.linea.org.br/linea/proxy/aHR0cHM6Ly9jaWxvZ29uLm9yZw==
+RUBIN_LOGIN_URL=$BASE_HOST/saml2/login/?idp=https://satosa-dev.linea.org.br/linea_saml_mirror/proxy/aHR0cHM6Ly9kYXRhLmxzc3QuY2xvdWQ=&next=/

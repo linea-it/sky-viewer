@@ -8,3 +8,8 @@ a {
   color: inherit;
   text-decoration: none;
 }
+
+/* Change Aladin Search field text color */
+.aladin-input-text.search {
+  color: #ffffff !important;
+}

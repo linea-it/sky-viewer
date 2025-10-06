@@ -10,6 +10,8 @@ import theme from './theme';
 import Header from "@/components/Header";
 import { Inter } from "next/font/google";
 import CssBaseline from '@mui/material/CssBaseline';
+import { AuthProvider } from "@/contexts/AuthContext";
+import MainContainer from "@/containers/MainContainer";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata = {
@@ -23,17 +25,11 @@ export default function RootLayout({ children }) {
       <body>
         <AppRouterCacheProvider options={{ enableCssLayer: true }}>
           <ThemeProvider theme={theme}>
-            <CssBaseline />
-            <Header />
-            <Box
-              component='main'
-              sx={{
-                paddingLeft: 0,
-                paddingRight: 0,
-                display: 'flex',
-              }}>
-              {children}
-            </Box>
+            <AuthProvider>
+              <MainContainer>
+                {children}
+              </MainContainer>
+            </AuthProvider>
           </ThemeProvider>
         </AppRouterCacheProvider>
       </body>
