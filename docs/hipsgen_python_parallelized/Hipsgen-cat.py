@@ -1,52 +1,44 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-HiPS Catalog Pipeline (Dask, Parquet-only) — CDS-faithful selection + methods
------------------------------------------------------------------------------
+HiPS Catalog Pipeline (Dask + Parquet)
+--------------------------------------
 
-This script generates a HiPS catalog layout matching the CDS tool output
-structure (Csv2ProgCatStandalone), while reading only Dask-native formats
-(Parquet, optionally CSV/TSV) and scaling out with Dask (LocalCluster/SLURM).
+This script, ``Hipsgen-cat.py``, builds HiPS-compliant catalog hierarchies
+from large input tables using Dask. It implements a coverage-based selection
+strategy: at each HiPS depth, it selects a controlled number of sources per
+HEALPix "coverage" cell, with optional density profiles as a function of depth
+and optional global per-level caps on the total number of rows.
 
-Faithful behaviors covered (no 'id' column required):
-- Depth 1 (Norder1): distribute ~n1 rows via density-weighted quotas
-- Depth 2 (Norder2): distribute ~n2 rows via density-weighted quotas
-- Depth 3 (Norder3): per-pixel quota = clip(round(no * rl3l4), n3_min, n3_max), capped by availability
-- Depth ≥ 4        : per-pixel quota limited by nm ≤ quota ≤ nM, capped by availability
-- All depths       : if order_desc=True -> keep highest scores; else keep lowest scores
-- Allsky.tsv       : contains only the rows actually selected at Norder1 and Norder2
-- Completeness     : each tile starts with “# Completeness = {remaining} / {total_in_cell}”
-- Methods          : weighting functions for L1/L2 quotas: LINEAR / LOG (default) / ASINH / SQRT / POW2
-                     and normalization to hit the global targets exactly (subject to availability)
-- l1l2_only        : optional mode to stop after generating Norder1/2 (testing convenience)
-- Level bounds     : level_limit lM validated to [4, 11] to mirror CDS tool constraints
+The on-disk layout, metadata files and MOC products are designed to be
+compatible with the original HiPS catalog tools developed at the CDS
+(Strasbourg astronomical Data Center). See:
+    https://aladin.cds.unistra.fr/hips/HipsCat.gml#examples
+This implementation is an independent rewrite with several new features and
+simplifications; only the output structure and metadata remain intentionally
+compatible.
 
-Dependencies (minimal):
-- dask[dataframe]
-- dask-jobqueue (for SLURMCluster)
-- pandas, pyarrow (Parquet)
-- astropy (FITS, VOTable)
-- mocpy (MOC FITS/JSON)
-- healpy (HEALPix hashing)
+Author: Luigi Silva
+Affiliation: Data Scientist, LIneA (Laboratório Interinstitucional de e-Astronomia)
+Contact: luigi.silva@linea.org.br
 
 Usage:
-    python hips_catalog_pipeline_dask.py --config config.yaml
+    python Hipsgen-cat.py --config config.yaml
 """
+
 from __future__ import annotations
 
-import re
 import os
 import sys
 import json
 import time
 import glob
-import dask
+import math
 import shutil
-import hashlib
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Tuple, Optional, Dict, Callable
+from typing import List, Dict, Optional, Callable
 
 import yaml
 import numpy as np
@@ -59,11 +51,12 @@ try:
 except Exception:
     SLURMCluster = None
 
+import healpy as hp
+
 from astropy.io import fits
 from astropy.table import Table
 from astropy.io.votable import from_table, writeto as vot_writeto
 
-import healpy as hp
 from mocpy import MOC
 
 
@@ -73,47 +66,80 @@ from mocpy import MOC
 
 @dataclass
 class AlgoOpts:
-    simple_algo: bool        # when True, use the "simple" path: L1/L2 ~ n1/n2; >=L3 use only `no`
-    order_desc: bool
-    method: str              # 'LINEAR' | 'LOG' | 'ASINH' | 'SQRT' | 'POW2' (default LOG)
-    level_limit: int         # lM (must be 4..11 to mirror CDS tool)
-    level_coverage: int      # lC
-    n1: int
-    n2: int
-    n3_min: int
-    n3_max: int
-    no: int                  # base per-pixel quota (>= L3 in simple mode)
-    nm: int                  # min per-pixel for depth ≥ 4 (non-simple mode)
-    nM: int                  # max per-pixel for depth ≥ 4 (non-simple mode)
-    rl3l4: float             # ratio for depth 3 relative to base 'no' (non-simple mode)
-    l1l2_only: bool          # stop after producing Norder1 and Norder2
-    print_info: bool = False # optional: print informational summaries like -p/--print_info
-    tie_buffer: int = 16     # extra candidates per ipix to absorb score ties at the cutoff
+    """
+    Algorithm options controlling the coverage-based HiPS catalog selection.
+
+    The logic is:
+      * Sources are grouped by a HEALPix "coverage" order (coverage_order → __icov__).
+      * At each HiPS level (depth), a target number of rows per coverage cell
+        is computed from a density profile (density_mode, k_per_cov_initial),
+        optionally overridden by per-level settings (k_per_cov_per_level) and
+        by global per-level caps (targets_total_per_level).
+      * Within each coverage cell, rows are ranked by the score expression and
+        truncated according to the desired density.
+    """
+    # HiPS / coverage geometry
+    level_limit: int              # maximum HiPS order (NorderL)
+    level_coverage: int           # MOC / coverage order (lC)
+    order_desc: bool              # False -> ascending score (lower is better)
+    coverage_order: int           # HEALPix order for __icov__ coverage cells
+
+    # Optional per-level overrides for k (hard overrides by depth).
+    # Example: {3: 0.6, 4: 1.2}
+    k_per_cov_per_level: Optional[Dict[int, float]] = None
+
+    # Optional global total caps per level (total rows per level).
+    targets_total_per_level: Optional[Dict[int, int]] = None
+
+    tie_buffer: int = 10          # score tie-buffer near cut (helps avoid artifacts)
+
+    # -------------------------
+    # Density profile controls
+    # -------------------------
+    # How k varies with depth:
+    #   "constant" → same k_per_cov_initial at all depths
+    #   "linear"   → increases linearly with depth
+    #   "exp"      → increases exponentially with depth
+    #   "log"      → increases ~log(depth)
+    density_mode: str = "constant"
+
+    # Expected rows per coverage cell (__icov__) at depth=1
+    # (base of the density profile).
+    k_per_cov_initial: float = 1.0
+
+    # Base used only when density_mode == "exp".
+    density_exp_base: float = 2.0
+
+    # How to handle the fractional part of k:
+    # "random" -> per-coverage random +1 (uniformity-oriented)
+    # "score"  -> global best-score selection (may break uniformity)
+    fractional_mode: str = "random"
+
 
 @dataclass
 class ColumnsCfg:
-    ra: str
-    dec: str
-    # Score expression: a single column or a Python expression using column names
-    score: str
-    # Optional explicit list of columns to keep in the output tiles.
-    # RA/DEC and score dependencies are always kept even if not listed here.
-    keep: Optional[List[str]] = None
+    ra: str       # RA column name (or index string for ASCII without header)
+    dec: str      # DEC column name
+    score: str    # score expression or column used for ranking
+    keep: Optional[List[str]] = None  # optional explicit list of columns to keep
+
 
 @dataclass
 class InputCfg:
-    paths: List[str]            # list of globs for Parquet/CSV/TSV files
-    format: str                 # 'parquet' | 'csv' | 'tsv'
-    header: bool                # kept for parity; ignored for parquet
-    ascii_format: Optional[str] = None  # optional hint: 'CSV' or 'TSV' (others not supported in Dask path)
+    paths: List[str]        # list of glob patterns for files
+    format: str             # 'parquet' | 'csv' | 'tsv'
+    header: bool            # header row present for CSV/TSV
+    ascii_format: Optional[str] = None  # optional hint ('CSV' or 'TSV')
+
 
 @dataclass
 class ClusterCfg:
     mode: str                  # 'local' | 'slurm'
     n_workers: int
     threads_per_worker: int
-    memory_per_worker: str     # e.g., '8GB'
-    slurm: Optional[Dict] = None  # e.g., {'queue': 'cpu_dev', 'account': '...', 'job_extra_directives': [...]}
+    memory_per_worker: str     # e.g. "8GB"
+    slurm: Optional[Dict] = None
+
 
 @dataclass
 class OutputCfg:
@@ -121,11 +147,6 @@ class OutputCfg:
     cat_name: str
     target: str                # "<RA0> <DEC0>" for properties
 
-@dataclass
-class DebugCfg:
-    origin: bool = False              # include __src__ and run debug checks
-    ranges_check: bool = False        # per-partition ranges check
-    containment_check: bool = False   # selected ⊆ input via hash
 
 @dataclass
 class Config:
@@ -134,7 +155,6 @@ class Config:
     algorithm: AlgoOpts
     cluster: ClusterCfg
     output: OutputCfg
-    debug: DebugCfg
 
 
 # =============================================================================
@@ -151,9 +171,11 @@ def _write_text(path: Path, content: str) -> None:
 
 def _now_str() -> str:
     return time.strftime("%d/%m/%y %H:%M:%S %Z", time.localtime())
-    
+
+
 def _ts() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+
 
 def _fmt_dur(seconds: float) -> str:
     s = int(seconds)
@@ -163,21 +185,52 @@ def _fmt_dur(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
 
 
-# -----------------------------------------------------------------------------
-# Canonical hash (RA, DEC, MAG) para containment check
-# -----------------------------------------------------------------------------
-def _canon_hash_pdf(pdf: pd.DataFrame, ra_col: str, dec_col: str, mag_col: str) -> pd.Series:
-    ra = pd.to_numeric(pdf[ra_col], errors="coerce").astype(np.float64).round(8).astype(str)
-    dec = pd.to_numeric(pdf[dec_col], errors="coerce").astype(np.float64).round(8).astype(str)
-    mag = pd.to_numeric(pdf[mag_col], errors="coerce").astype(np.float64).round(6).astype(str)
-    s = ra + "|" + dec + "|" + mag
-    return s.map(lambda x: hashlib.md5(x.encode()).hexdigest())
+def _stats_counts(counts: np.ndarray) -> tuple[int, int]:
+    """Return (total_rows, non_empty_pixels) for a densmap vector."""
+    total = int(counts.sum())
+    nonempty = int((counts > 0).sum())
+    return total, nonempty
+
+
+def _log_depth_stats(
+    _log_fn: Callable[[str, bool], None],
+    depth: int,
+    phase: str,
+    counts: Optional[np.ndarray] = None,
+    candidates_len: Optional[int] = None,
+    selected_len: Optional[int] = None,
+    written: Optional[Dict[int, int]] = None,
+    remainder_len: Optional[int] = None,
+) -> None:
+    """
+    Print a compact one-line summary for a given depth and pipeline phase.
+    `phase` examples: "start", "candidates", "selected", "written", "filtered".
+    """
+    parts = []
+    if counts is not None:
+        tot, nz = _stats_counts(counts)
+        parts.append(f"input_rows={tot}")
+        parts.append(f"non_empty_pixels={nz}")
+    if candidates_len is not None:
+        parts.append(f"candidates={candidates_len}")
+    if selected_len is not None:
+        parts.append(f"selected={selected_len}")
+    if written is not None:
+        rows_written = int(sum(written.values())) if written else 0
+        tiles_written = int(len(written)) if written else 0
+        parts.append(f"tiles_written={tiles_written}")
+        parts.append(f"rows_written={rows_written}")
+    if remainder_len is not None:
+        parts.append(f"remainder={remainder_len}")
+    _log_fn(f"[DEPTH {depth}] {phase}: " + "; ".join(parts), always=True)
 
 
 # -----------------------------------------------------------------------------
-# Score dependency extraction (best-effort)
+# Score dependency extraction and column resolution
 # -----------------------------------------------------------------------------
+import re
 _ID_RE = re.compile(r"[A-Za-z_]\w*")
+
 
 def _score_deps(score_expr: str, available: List[str]) -> List[str]:
     """
@@ -189,6 +242,7 @@ def _score_deps(score_expr: str, available: List[str]) -> List[str]:
         return []
     tokens = set(_ID_RE.findall(str(score_expr)))
     return [c for c in available if c in tokens]
+
 
 def _resolve_col_name(spec: str, ddf: dd.DataFrame, header: bool) -> str:
     """
@@ -209,28 +263,25 @@ def _resolve_col_name(spec: str, ddf: dd.DataFrame, header: bool) -> str:
             raise IndexError(f"Column index {idx_1based} out of range (1..{len(cols)})")
         return cols[idx]
     except ValueError:
-        # not an integer, fallback to name
         if spec not in ddf.columns:
             raise KeyError(f"Column '{spec}' not found (header=False).")
         return spec
 
+
 # -----------------------------------------------------------------------------
-# Build Dask DataFrame from a list of files, optionally tagging each row
-# with the file it came from as __src__ (debug.origin mode).
+# Build Dask DataFrame from input files (no debug/origin in this simplified version)
 # -----------------------------------------------------------------------------
-def _build_input_ddf(paths: List[str],
-                     cfg: Config,
-                     _log: Callable[[str, bool], None]) -> Tuple[dd.DataFrame, str, str, List[str]]:
+def _build_input_ddf(paths: List[str], cfg: Config) -> tuple[dd.DataFrame, str, str, List[str]]:
     """
     Returns:
-      ddf       : Dask DataFrame ready to use (optionally with __src__)
+      ddf       : Dask DataFrame ready to use
       RA_NAME  : resolved RA column name
       DEC_NAME : resolved DEC column name
       keep_cols: final ordered list of columns kept (header order for tiles)
     """
     assert len(paths) > 0, "No input files matched."
 
-    # 1) Base read (no __src__) to discover columns and resolve RA/DEC.
+    # 1) Base read to discover columns and resolve RA/DEC
     if cfg.input.format.lower() == "parquet":
         ddf0 = dd.read_parquet(paths, engine="pyarrow")
     elif cfg.input.format.lower() in ("csv", "tsv"):
@@ -248,13 +299,21 @@ def _build_input_ddf(paths: List[str],
     else:
         raise ValueError("Unsupported input.format; use 'parquet', 'csv', or 'tsv'.")
 
-    # Resolve RA/DEC allowing numeric index when header=False on CSV/TSV.
-    ra_col = _resolve_col_name(cfg.columns.ra, ddf0, header=(cfg.input.format.lower()=="parquet" or cfg.input.header))
-    dec_col = _resolve_col_name(cfg.columns.dec, ddf0, header=(cfg.input.format.lower()=="parquet" or cfg.input.header))
+    # Resolve RA/DEC
+    ra_col = _resolve_col_name(
+        cfg.columns.ra,
+        ddf0,
+        header=(cfg.input.format.lower() == "parquet" or cfg.input.header),
+    )
+    dec_col = _resolve_col_name(
+        cfg.columns.dec,
+        ddf0,
+        header=(cfg.input.format.lower() == "parquet" or cfg.input.header),
+    )
     RA_NAME = ra_col
     DEC_NAME = dec_col
 
-    # 2) Column selection (preserve order; ensure score deps).
+    # 2) Column selection (preserve order; ensure score deps)
     available_cols = list(ddf0.columns)
     score_dependencies = _score_deps(cfg.columns.score, available_cols)
     requested_keep = (cfg.columns.keep or [])
@@ -268,42 +327,7 @@ def _build_input_ddf(paths: List[str],
             keep_cols.append(c)
             seen.add(c)
 
-    # 3) Build final ddf.
-    if cfg.debug.origin:
-        parts = []
-    
-        # nunca peça '__src__' ao parquet
-        keep_cols_no_src = [c for c in keep_cols if c != "__src__"]
-    
-        for f in sorted(paths):
-            if cfg.input.format.lower() == "parquet":
-                # ⛔️ Evita que o Dask empurre '__src__' para dentro do read_parquet
-                with dask.config.set({"dataframe.optimize.getitem": False}):
-                    dfi = dd.read_parquet(f, engine="pyarrow", columns=keep_cols_no_src)
-            else:
-                ascii_fmt = (cfg.input.ascii_format or "").upper().strip()
-                sep = "," if ascii_fmt in ("CSV", "") and cfg.input.format.lower() == "csv" else \
-                      "\t" if ascii_fmt == "TSV" or cfg.input.format.lower() == "tsv" else ","
-                dfi = dd.read_csv(
-                    f, sep=sep, assume_missing=True,
-                    header=(None if not cfg.input.header else "infer"),
-                    usecols=keep_cols_no_src
-                )
-    
-            # adiciona a coluna de origem DEPOIS de ler
-            dfi = dfi.map_partitions(lambda pdf, src=f: pdf.assign(__src__=src),
-                                     meta={**{c: dfi._meta[c] for c in keep_cols_no_src}, "__src__": "object"})
-            parts.append(dfi)
-    
-        ddf = dd.concat(parts, interleave_partitions=True)
-    
-        # garante ordem estável no cabeçalho dos tiles
-        if "__src__" not in keep_cols:
-            keep_cols.append("__src__")
-        ddf = ddf[keep_cols]
-    else:
-        ddf = ddf0[keep_cols]
-
+    ddf = ddf0[keep_cols]
     return ddf, RA_NAME, DEC_NAME, keep_cols
 
 
@@ -351,13 +375,13 @@ def ipix_for_depth(ra_deg: np.ndarray, dec_deg: np.ndarray, depth: int) -> np.nd
     return hp.ang2pix(nside, theta, phi, nest=True)
 
 
-def densmap_for_depth(ddf: dd.DataFrame, ra_col: str, dec_col: str, depth: int) -> np.ndarray:
+def densmap_for_depth_delayed(ddf: dd.DataFrame, ra_col: str, dec_col: str, depth: int):
     """
-    Count rows per HEALPix (NESTED) at 'depth' via per-partition histograms and a
-    delayed tree-reduction. This avoids full-dataframe shuffles and works robustly
-    with Dask DataFrame partitions.
+    Delayed version: build a delayed HEALPix histogram at 'depth'.
+
+    Returns a Dask delayed object which, when computed, yields
+    a NumPy vector with counts per NESTED pixel at the given depth.
     """
-    # Local imports keep the function self-contained
     import numpy as _np
     from dask import delayed as _delayed
 
@@ -365,83 +389,32 @@ def densmap_for_depth(ddf: dd.DataFrame, ra_col: str, dec_col: str, depth: int) 
     npix = hp.nside2npix(nside)
 
     def _part_hist(pdf: pd.DataFrame) -> _np.ndarray:
-        """Build a fixed-length histogram (npix) for one pandas partition."""
         if pdf is None or len(pdf) == 0:
             return _np.zeros(npix, dtype=_np.int64)
         ip = ipix_for_depth(pdf[ra_col].to_numpy(), pdf[dec_col].to_numpy(), depth)
-        # bincount with minlength ensures a fixed-length vector
         return _np.bincount(ip, minlength=npix).astype(_np.int64)
 
-    # Create one delayed histogram task per partition
+    # One histogram per partition
     part_delayed = ddf.to_delayed()
     hists = [_delayed(_part_hist)(p) for p in part_delayed]
 
-    # Sum all histograms with a delayed reduction (tree-like)
     if len(hists) == 0:
-        return _np.zeros(npix, dtype=_np.int64)
+        # Still return a delayed object for consistency
+        return _delayed(lambda: _np.zeros(npix, dtype=_np.int64))()
 
     def _sum_vecs(vecs: list[_np.ndarray]) -> _np.ndarray:
         return _np.sum(vecs, axis=0, dtype=_np.int64)
 
     total = _delayed(_sum_vecs)(hists)
-    dens = total.compute()  # materialize as a single numpy vector
-
-    return dens
+    return total
 
 
-# =============================================================================
-# Coverage helpers (MOC-like percentage per pixel at a given depth)
-# =============================================================================
-
-def _coverage_pct_from_lc(depth: int, level_coverage: int, dens_lc: np.ndarray) -> np.ndarray:
+def densmap_for_depth(ddf: dd.DataFrame, ra_col: str, dec_col: str, depth: int) -> np.ndarray:
     """
-    Compute percentage coverage per pixel at 'depth' using the densmap at lC.
-    Coverage at depth <= lC is the fraction of its 4^(lC - depth) children at lC that are non-zero.
-    For depth > lC we treat coverage as 1.0 (fully covered) for quota shaping.
+    Backward-compatible wrapper: compute densmap for a given depth
+    immediately, keeping the original behaviour.
     """
-    if depth < 0:
-        raise ValueError("depth must be >= 0")
-    if level_coverage < 0:
-        raise ValueError("level_coverage must be >= 0")
-
-    if depth > level_coverage:
-        nside = 1 << depth
-        npix = hp.nside2npix(nside)
-        return np.ones(npix, dtype=np.float64)
-
-    nside_d = 1 << depth
-    nside_c = 1 << level_coverage
-    npix_d = hp.nside2npix(nside_d)
-
-    # Same order: coverage is simply the non-zero mask at lC
-    if nside_c == nside_d:
-        return (dens_lc > 0).astype(np.float64)
-
-    # Number of children per parent pixel (NESTED): 4^(lC - depth)
-    nc = 4 ** (level_coverage - depth)
-
-    mask_c = (dens_lc > 0).astype(np.int32)
-
-    # Fast path: in NESTED indexing, children of parent p occupy [p*nc, (p+1)*nc)
-    if mask_c.size == nc * npix_d:
-        return mask_c.reshape(npix_d, nc).mean(axis=1).astype(np.float64)
-
-    # Fallback: compute parent indices explicitly (robust to odd layouts)
-    factor = 4 ** (level_coverage - depth)
-    parent = np.arange(mask_c.size, dtype=np.int64) // factor
-    sums = np.bincount(parent, weights=mask_c, minlength=npix_d)
-    return (sums / float(factor)).astype(np.float64)
-
-
-def compute_coverage_pct_for_depths(level_limit: int, level_coverage: int, dens_lc: np.ndarray) -> Dict[int, np.ndarray]:
-    """
-    Precompute coverage percentage arrays for depths 0..level_limit using the lC densmap.
-    Returns a dict depth -> coverage_pct (float64 in [0,1]).
-    """
-    cov = {}
-    for d in range(0, level_limit + 1):
-        cov[d] = _coverage_pct_from_lc(d, level_coverage, dens_lc)
-    return cov
+    return densmap_for_depth_delayed(ddf, ra_col, dec_col, depth).compute()
 
 
 # =============================================================================
@@ -495,7 +468,7 @@ def write_properties(out_dir: Path, label: str, target: str, level_limit: int, n
     buf.append(f"# {now}\n")
     buf.append(f"publisher_did     = ivo://PRIVATE_USER/{label}\n")
     buf.append("dataproduct_type  = catalog\n")
-    buf.append(f"hips_service_url  = {out_dir}{label}\n")  # keep as-is (local path acceptable); change to URL if publishing
+    buf.append(f"hips_service_url  = {str(out_dir).rstrip('/')}/{label}\n")
     buf.append("hips_builder      = cds.hips.cat.standalone.v0.2\n")
     buf.append(f"hips_release_date = {now}\n")
     buf.append("hips_frame        = equatorial\n")
@@ -519,7 +492,7 @@ def write_arguments(out_dir: Path, args_text: str):
     _write_text(out_dir / "arguments", args_text)
 
 
-def write_metadata_xml(out_dir: Path, columns: List[Tuple[str, str, Optional[str]]], ra_idx: int, dec_idx: int):
+def write_metadata_xml(out_dir: Path, columns: List[tuple[str, str, Optional[str]]], ra_idx: int, dec_idx: int):
     """
     Build a VOTable (metadata-only) marking RA/DEC with UCD 'meta.main'.
     Writes metadata.xml and Metadata.xml to match CDS behavior.
@@ -547,7 +520,6 @@ def write_metadata_xml(out_dir: Path, columns: List[Tuple[str, str, Optional[str
         else:
             field.ucd = columns[i][2] or field.ucd
 
-    # write both lower/upper case variants
     path_lower = str(out_dir / "metadata.xml")
     path_upper = str(out_dir / "Metadata.xml")
     try:
@@ -621,293 +593,44 @@ def write_densmap_fits(out_dir: Path, depth: int, counts: np.ndarray):
     if depth >= 13:
         return
     hdu0 = fits.PrimaryHDU()
-    col = fits.Column(name='VALUE', array=counts.astype(np.int64), format='K')
+    col = fits.Column(name="VALUE", array=counts.astype(np.int64), format="K")
     hdu1 = fits.BinTableHDU.from_columns([col])
     fits.HDUList([hdu0, hdu1]).writeto(out_dir / f"densmap_o{depth}.fits", overwrite=True)
 
 
 # =============================================================================
-# Weighting methods for L1/L2 + exact-normalization to hit targets
+# Tile / Allsky helpers
 # =============================================================================
 
-def _method_fn(name: str) -> Callable[[np.ndarray], np.ndarray]:
-    name = (name or "LOG").upper()
-    if name == "LINEAR":
-        return lambda x: x.astype(np.float64)
-    if name == "LOG":
-        return lambda x: np.log1p(x.astype(np.float64))
-    if name == "ASINH":
-        return lambda x: np.arcsinh(x.astype(np.float64))
-    if name == "SQRT":
-        return lambda x: np.sqrt(x.astype(np.float64))
-    if name == "POW2":
-        return lambda x: (x.astype(np.float64) ** 2.0)
-    # default
-    return lambda x: np.log1p(x.astype(np.float64))
-
-
-def _allocate_with_caps(counts: np.ndarray, weights: np.ndarray, target_total: int) -> np.ndarray:
-    """
-    Proportional allocation with flooring + remainder distribution,
-    capped by availability (counts). If weights sum to zero or target<=0 -> zeros.
-    """
-    q = np.zeros_like(counts, dtype=np.int64)
-    if target_total <= 0 or counts.sum() == 0:
-        return q
-    total_w = float(weights.sum())
-    if total_w <= 0.0:
-        return q
-
-    raw = weights * (target_total / total_w)
-    base = np.floor(raw).astype(np.int64)
-    q = np.minimum(counts, base)
-
-    missing = target_total - int(q.sum())
-    if missing <= 0:
-        return q
-
-    frac = raw - base
-    order = np.argsort(-frac)  # descending by fractional part
-    for idx in order:
-        if q[idx] < counts[idx]:
-            q[idx] += 1
-            missing -= 1
-            if missing == 0:
-                break
-    return q
-
-
-# =============================================================================
-# CDS-faithful quotas per depth
-# =============================================================================
-
-def compute_quotas_for_depth(depth: int,
-                             counts: np.ndarray,
-                             cfg_algo: AlgoOpts,
-                             coverage_pct: Optional[np.ndarray] = None) -> np.ndarray:
-    """
-    Per-pixel integer quotas for a given depth, CDS-like, with coverage shaping.
-
-    Non-simple mode (default):
-      - depth == 1: distribute ~n1 using 'method' weights + exact normalization, capped by availability
-      - depth == 2: distribute ~n2 likewise
-      - depth == 3: per-pixel quota = min(counts[p], clip(round(no * rl3l4), n3_min, n3_max)),
-                    then multiplied by coverage percentage and rounded (>=1 where counts>0)
-      - depth >= 4: per-pixel quota clipped to [nm, nM], capped by availability,
-                    multiplied by coverage percentage and rounded (>=1 where counts>0)
-
-    Simple mode (cfg_algo.simple_algo=True; mirrors '-simple'):
-      - depth == 1/2: linear weights to hit n1/n2 (as before)
-      - depth >= 3: per-pixel quota = min(counts[p], round(coverage_pct[p] * no))
-    """
-    npix = len(counts)
-    q = np.zeros(npix, dtype=np.int64)
-    cov = coverage_pct if coverage_pct is not None else np.ones(npix, dtype=np.float64)
-    cov = np.clip(cov, 0.0, 1.0)
-
-    # --- Simple mode ---
-    if cfg_algo.simple_algo:
-        if depth in (1, 2):
-            target_total = int(cfg_algo.n1 if depth == 1 else cfg_algo.n2)
-            if target_total <= 0 or counts.sum() == 0:
-                return q
-            weights = counts.astype(np.float64)
-            weights[counts == 0] = 0.0
-            return _allocate_with_caps(counts, weights, target_total)
-        else:
-            base = np.round(cov * float(cfg_algo.no)).astype(np.int64)
-            base[base < 0] = 0
-            base = np.minimum(counts, base)
-            return base
-
-    # --- Non-simple mode (default) ---
-    if depth in (1, 2):
-        target_total = int(cfg_algo.n1 if depth == 1 else cfg_algo.n2)
-        if target_total <= 0 or counts.sum() == 0:
-            return q
-        wfn = _method_fn(cfg_algo.method)
-        weights = wfn(counts)
-        weights[counts == 0] = 0.0
-        return _allocate_with_caps(counts, weights, target_total)
-
-    if depth == 3:
-        base_l3 = int(round(cfg_algo.no * float(cfg_algo.rl3l4)))
-        base_l3 = max(cfg_algo.n3_min, min(cfg_algo.n3_max, base_l3))
-        base = np.full(npix, base_l3, dtype=np.int64)
-
-        # Coverage shaping
-        shaped = np.round(base * cov).astype(np.int64)
-        # Guarantee at least 1 where there is availability
-        shaped = np.where(counts > 0, np.maximum(shaped, 1), 0)
-        np.minimum(counts, shaped, out=q)
-        return q
-
-    # depth >= 4
-    base = np.minimum(counts, int(cfg_algo.nM)).astype(np.int64)
-    nm = int(cfg_algo.nm)
-    if nm > 0:
-        base = np.where(counts >= nm, np.maximum(base, nm), np.minimum(base, counts))
-
-    shaped = np.round(base * cov).astype(np.int64)
-    shaped = np.where(counts > 0, np.maximum(shaped, 1), 0)
-    np.minimum(counts, shaped, out=q)
-    return q
-
-
-# =============================================================================
-# Partition writer — uses quotas + order_desc
-# =============================================================================
-
-def produce_candidates_partition(pdf: pd.DataFrame,
-                                 depth: int,
-                                 ra_col: str,
-                                 dec_col: str,
-                                 keep_quotas_npy: str,
-                                 order_desc: bool,
-                                 columns_plus_score: List[str],
-                                 tie_buffer: int) -> pd.DataFrame:
-    """
-    Partition-level candidate producer (no I/O):
-      - compute score
-      - compute __ipix__ at the given depth
-      - per ipix, keep top (quota + tie_buffer) with stable tie-break keys
-      - return only candidates; final selection & writing happen globally
-    Returned columns:
-      ["__ipix__", "__score__", *tile_columns]
-    """
-    # Empty fast-path
-    if len(pdf) == 0 or len(columns_plus_score) < 1:
-        return pd.DataFrame({
-            "__ipix__": pd.Series(dtype="int64"),
-            "__score__": pd.Series(dtype="float64"),
-        })
-
-    columns = columns_plus_score[:-1]
-    score_expr = columns_plus_score[-1]
-
-    # Build score series (column or Python expression on existing columns)
-    if score_expr in pdf.columns:
-        sc = pd.to_numeric(pdf[score_expr], errors="coerce")
-    else:
-        code = compile(score_expr, "<score>", "eval")
-        env = {col: pdf[col] for col in pdf.columns if col in columns}
-        out = eval(code, {"__builtins__": {}}, env)
-        sc = pd.to_numeric(out, errors="coerce")
-
-    # Make NaNs worst depending on sort direction
-    sc = pd.Series(sc.values, index=pdf.index).replace([np.inf, -np.inf], np.nan)
-    sc = sc.fillna(-np.inf if order_desc else np.inf)
-
-    # HEALPix index at this depth
-    ipix = ipix_for_depth(pdf[ra_col].to_numpy(), pdf[dec_col].to_numpy(), depth)
-
-    # Load quotas (memmap)
-    quotas = np.load(keep_quotas_npy, mmap_mode="r")
-
-    # Prepare DF with ipix/score and the tile columns
-    tile_cols = [c for c in pdf.columns if c in columns]  # preserve column order
-    df2 = pdf[tile_cols].copy()
-    df2["__ipix__"] = ipix
-    df2["__score__"] = sc
-
-    # Stable tie-break: sort by (score, RA, DEC) asc or desc on score, RA/DEC asc
-    # NOTE: RA/DEC must exist among tile columns.
-    sort_cols = ["__score__", ra_col, dec_col]
-    ascending = [not order_desc, True, True]
-
-    out_parts = []
-    for pid, g in df2.groupby("__ipix__"):
-        pid = int(pid)
-        if pid < 0 or pid >= len(quotas):
-            continue
-        q = int(quotas[pid])
-        if q <= 0 or len(g) == 0:
-            continue
-        k_buf = q + int(tie_buffer)
-        gg = g.sort_values(sort_cols, ascending=ascending, kind="mergesort").head(k_buf)
-        out_parts.append(gg)
-
-    if not out_parts:
-        return pd.DataFrame({
-            "__ipix__": pd.Series(dtype="int64"),
-            "__score__": pd.Series(dtype="float64"),
-        })
-
-    return pd.concat(out_parts, ignore_index=True)
-
-def reduce_candidates_global(pdf: pd.DataFrame,
-                             depth: int,
-                             ra_col: str,
-                             dec_col: str,
-                             quotas_npy: str,
-                             order_desc: bool,
-                             tie_buffer: int) -> pd.DataFrame:
-    """
-    Second pass at pandas (single-partition DataFrame):
-      For each ipix, keep top (quota + tie_buffer) again, globally.
-      Returns a compact set of candidates per ipix for final cut.
-    """
-    if len(pdf) == 0:
-        return pdf
-
-    quotas = np.load(quotas_npy, mmap_mode="r")
-    sort_cols = ["__score__", ra_col, dec_col]
-    ascending = [not order_desc, True, True]
-
-    out_parts = []
-    for pid, g in pdf.groupby("__ipix__"):
-        pid = int(pid)
-        if pid < 0 or pid >= len(quotas):
-            continue
-        q = int(quotas[pid])
-        if q <= 0 or len(g) == 0:
-            continue
-        k_buf = q + int(tie_buffer)
-        gg = g.sort_values(sort_cols, ascending=ascending, kind="mergesort").head(k_buf)
-        out_parts.append(gg)
-
-    if not out_parts:
-        return pdf.iloc[0:0]
-
-    return pd.concat(out_parts, ignore_index=True)
-
-
-def finalize_write_tiles(out_dir: Path,
-                         depth: int,
-                         header_line: str,
-                         ra_col: str,
-                         dec_col: str,
-                         counts: np.ndarray,
-                         selected: pd.DataFrame,
-                         order_desc: bool,
-                         stage_dir: Optional[Path] = None,
-                         allsky_collect: bool = False) -> Tuple[Dict[int, int], Optional[pd.DataFrame]]:
+def finalize_write_tiles(
+    out_dir: Path,
+    depth: int,
+    header_line: str,
+    ra_col: str,
+    dec_col: str,
+    counts: np.ndarray,
+    selected: pd.DataFrame,
+    order_desc: bool,
+    stage_dir: Optional[Path] = None,
+    allsky_collect: bool = False,
+) -> tuple[Dict[int, int], Optional[pd.DataFrame]]:
     """
     Write one TSV per HEALPix cell (atomic rename), with a Completeness header
-    and a single header line, followed by the selected rows in the SAME column
+    and a single header line, followed by selected rows in the SAME column
     order as the header. Uses pandas.to_csv to avoid partial/truncated first line.
-
-    Why this fix:
-      - Manual "\t".join(...) can yield truncated first row in rare cases.
-      - pandas.to_csv handles quoting/newlines robustly.
-      - We derive the exact header order from `header_line`.
     """
     writer = TSVTileWriter(out_dir, depth, header_line)
     npix = len(counts)
     written: Dict[int, int] = {}
     allsky_rows: List[List[str]] = []
 
-    # Derive the header order from header_line (robust and local, no global ddf needed).
     header_cols = header_line.strip("\n").split("\t")
+    internal = {"__ipix__", "__score__", "__icov__"}
+    tile_cols = [c for c in header_cols if c not in internal and c in selected.columns]
 
-    # Keep only the tile columns, in the exact header order (drop internals).
-    tile_cols = [c for c in header_cols if c in selected.columns]
-
-    # Fast exit: nothing to write
     if selected is None or len(selected) == 0 or len(tile_cols) == 0:
         return {}, None
 
-    # We'll group by ipix and write per-cell atomically.
     for pid, g in selected.groupby("__ipix__"):
         ip = int(pid)
         if ip < 0 or ip >= npix:
@@ -915,10 +638,7 @@ def finalize_write_tiles(out_dir: Path,
 
         n_src_cell = int(counts[ip])
 
-        # Ensure we have a DataFrame with exactly the columns in header order.
-        # Cast to str only at write-time (handled by pandas), not earlier.
         g_tile = g[tile_cols].copy()
-
         n_written = int(len(g_tile))
         written[ip] = n_written
         n_remaining = max(0, n_src_cell - n_written)
@@ -927,25 +647,19 @@ def finalize_write_tiles(out_dir: Path,
 
         final_path = writer.cell_path(ip)
         final_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Write to a temp path in the same directory, then atomic replace.
         tmp = final_path.with_name(f".Npix{ip}.tsv.tmp")
 
-        # 1) Write the two header lines in text mode (UTF-8).
+        # 1) Write completeness + header
         with tmp.open("w", encoding="utf-8", newline="") as f:
             f.write(completeness_header)
             f.write(header_line)
 
-        # Sanitize string columns to avoid embedded tabs/newlines breaking TSV rows
-        # (only needed if you keep object/string columns in tiles)
+        # Sanitize string columns
         obj_cols = g_tile.select_dtypes(include=["object", "string"]).columns
         if len(obj_cols) > 0:
             g_tile[obj_cols] = g_tile[obj_cols].replace({r"[\t\r\n]": " "}, regex=True)
-        
-        # 2) Append rows using pandas.to_csv (robust serialization).
-        #    - sep = '\t'
-        #    - header = False (we already wrote the header_line)
-        #    - index = False
+
+        # 2) Append rows
         g_tile.to_csv(
             tmp,
             sep="\t",
@@ -954,18 +668,13 @@ def finalize_write_tiles(out_dir: Path,
             mode="a",
             encoding="utf-8",
             lineterminator="\n",
-            float_format=None  # let pandas write full precision as needed
         )
 
-        # 3) Atomic move into place
         os.replace(tmp, final_path)
 
         if allsky_collect and n_written > 0:
-            # Collect for Allsky in the same column order for later to_csv.
-            # Store as list of lists (strings are handled at write time).
             allsky_rows.extend(g_tile.values.tolist())
 
-    # Build Allsky DataFrame if requested (for depths 1/2 only).
     allsky_df = None
     if allsky_collect and allsky_rows:
         allsky_df = pd.DataFrame(allsky_rows, columns=tile_cols)
@@ -973,109 +682,324 @@ def finalize_write_tiles(out_dir: Path,
     return written, allsky_df
 
 
-def build_thresholds(selected: pd.DataFrame,
-                     order_desc: bool) -> Dict[int, float]:
+def build_header_line_from_keep(keep_cols: List[str]) -> str:
+    """Build header line from keep_cols (before internal columns are added)."""
+    return "\t".join([str(c) for c in keep_cols]) + "\n"
+
+
+# =============================================================================
+# Coverage-based selection helpers
+# =============================================================================
+
+def build_cov_thresholds(selected: pd.DataFrame, score_col: str, order_desc: bool) -> Dict[int, float]:
     """
-    Compute per-ipix thresholds from the final selected rows:
-      - ascending  -> threshold = max score among kept
-      - descending -> threshold = min score among kept
+    Per-coverage worst-kept thresholds:
+      - ascending  -> max(score) among kept in each __icov__
+      - descending -> min(score) among kept in each __icov__
+    Used to filter the remainder so that selected rows never reappear.
     """
-    thr = {}
     if len(selected) == 0:
-        return thr
+        return {}
     if order_desc:
-        # higher is better, worst kept is the min
-        s = selected.groupby("__ipix__")["__score__"].min()
+        s = selected.groupby("__icov__")[score_col].min()
     else:
-        # lower is better, worst kept is the max
-        s = selected.groupby("__ipix__")["__score__"].max()
-    for k, v in s.items():
-        thr[int(k)] = float(v)
-    return thr
+        s = selected.groupby("__icov__")[score_col].max()
+    return {int(k): float(v) for k, v in s.items()}
 
 
-# =============================================================================
-# Remainder filter — propagate only what was NOT selected at current depth
-# =============================================================================
-
-def filter_remainder_partition(pdf: pd.DataFrame,
-                               depth: int,
-                               ra_col: str,
-                               dec_col: str,
-                               score_expr: str,
-                               order_desc: bool,
-                               thr_dict: Dict[int, float]) -> pd.DataFrame:
+def filter_remainder_by_coverage_partition(
+    pdf: pd.DataFrame,
+    score_expr: str,
+    order_desc: bool,
+    thr_cov: Dict[int, float],
+    ra_col: str,
+    dec_col: str,
+) -> pd.DataFrame:
     """
-    Given a partition, return only rows that should propagate to the next depth:
-      - compute __ipix__ at 'depth' and __score__
-      - keep rows that are strictly WORSE than the threshold of their pixel
-        * ascending: score > threshold
-        * descending: score < threshold
-    Rows whose ipix has no threshold (i.e., no selection happened for that pixel)
-    are passed through entirely.
+    Keep only rows that are strictly *worse* than the kept threshold in their
+    coverage pixel (__icov__). Rows from pixels with no threshold pass through.
     """
     if len(pdf) == 0:
         return pdf
 
-    # Build score
+    # Score computation: column or expression on existing columns
     if score_expr in pdf.columns:
         sc = pd.to_numeric(pdf[score_expr], errors="coerce")
     else:
         code = compile(score_expr, "<score>", "eval")
-        env = {col: pdf[col] for col in pdf.columns if col in pdf.columns}
-        out = eval(code, {"__builtins__": {}}, env)
+        env = {"__builtins__": {}, "np": np, "numpy": np}
+        env.update({col: pdf[col] for col in pdf.columns})
+        out = eval(code, env, {})
         sc = pd.to_numeric(out, errors="coerce")
 
     sc = sc.replace([np.inf, -np.inf], np.nan)
-    if order_desc:
-        sc = sc.fillna(-np.inf)
-    else:
-        sc = sc.fillna(np.inf)
+    sc = sc.fillna(-np.inf if order_desc else np.inf)
 
-    ipix = ipix_for_depth(pdf[ra_col].values, pdf[dec_col].values, depth)
+    if "__icov__" not in pdf.columns:
+        return pdf
 
-    # Build mask: pass through if no threshold exists; otherwise apply strict inequality
-    thr = np.vectorize(lambda p: thr_dict.get(int(p), None))(ipix)
+    icov = pdf["__icov__"].to_numpy()
+    thr = np.array([thr_cov.get(int(c), None) for c in icov], dtype=object)
+
     if order_desc:
-        # Selected kept the highest scores; remainder is strictly lower than threshold
-        mask = (thr == None) | (sc.values < np.array([t if t is not None else (np.inf if order_desc else -np.inf) for t in thr], dtype=np.float64))
+        mask = np.array([(t is None) or (s < t) for s, t in zip(sc.values, thr)], dtype=bool)
     else:
-        # Selected kept the lowest scores; remainder is strictly higher than threshold
-        mask = (thr == None) | (sc.values > np.array([t if t is not None else (-np.inf if order_desc else np.inf) for t in thr], dtype=np.float64))
+        mask = np.array([(t is None) or (s > t) for s, t in zip(sc.values, thr)], dtype=bool)
 
     return pdf.loc[mask]
 
 
+def _candidates_by_coverage_partition(
+    pdf: pd.DataFrame,
+    score_col: str,
+    order_desc: bool,
+    k_per_cov: int | dict,
+    tie_buffer: int,
+    ra_col: str,
+    dec_col: str,
+) -> pd.DataFrame:
+    """
+    If k_per_cov is a dict {icov: k}, use per-coverage k; otherwise use scalar k for all.
+    Keeps up to (k + tie_buffer) rows per coverage pixel (__icov__).
+    """
+    if len(pdf) == 0:
+        return pdf.iloc[0:0]
+
+    asc = (not order_desc)
+    pdf = pdf.sort_values(
+        ["__icov__", score_col, ra_col, dec_col],
+        ascending=[True, asc, True, True],
+        kind="mergesort",
+    )
+    pdf["__rk__"] = pdf.groupby("__icov__").cumcount()
+
+    if isinstance(k_per_cov, dict):
+        def _keep_group(g: pd.DataFrame) -> pd.DataFrame:
+            ic = int(g["__icov__"].iloc[0])
+            k = int(k_per_cov.get(ic, 0))
+            need = max(0, k + int(tie_buffer))
+            return g.iloc[:need]
+        out = pdf.groupby("__icov__", group_keys=False).apply(_keep_group)
+    else:
+        need = int(k_per_cov) + int(tie_buffer)
+        out = pdf[pdf["__rk__"] < need]
+
+    return out.drop(columns=["__rk__"])
+
+
+def _reduce_coverage_exact(
+    pdf: pd.DataFrame,
+    score_col: str,
+    order_desc: bool,
+    k_per_cov: int | dict,
+    ra_col: str,
+    dec_col: str,
+) -> pd.DataFrame:
+    """
+    Keep exactly k rows per coverage when possible; if availability < k, keep what's available.
+    Supports scalar k or dict {icov: k}.
+    """
+    if len(pdf) == 0:
+        return pdf.iloc[0:0]
+
+    asc = (not order_desc)
+    out = []
+    for icov, g in pdf.groupby("__icov__"):
+        k = int(k_per_cov.get(int(icov), 0)) if isinstance(k_per_cov, dict) else int(k_per_cov)
+        if k <= 0 or len(g) == 0:
+            continue
+        gg = g.sort_values(
+            [score_col, ra_col, dec_col],
+            ascending=[asc, True, True],
+            kind="mergesort",
+        ).head(k)
+        out.append(gg)
+    return pd.concat(out, ignore_index=True) if out else pdf.iloc[0:0]
+
+
+def apply_fractional_k_per_cov(
+    selected: pd.DataFrame,
+    k_desired: float,
+    score_col: str,
+    order_desc: bool,
+    mode: str = "random",
+    ra_col: str | None = None,
+    dec_col: str | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Apply fractional-k adjustment on top of an integer per-coverage selection.
+
+    Inputs
+    -------
+    selected : pd.DataFrame
+        DataFrame already limited to <= k_int rows per __icov__ 
+        (output of _reduce_coverage_exact).
+    k_desired : float
+        Expected number of rows per coverage cell (can be fractional).
+    score_col : str
+        Column name used for ranking.
+    order_desc : bool
+        If False → lower score is better; if True → higher score is better.
+    mode : str
+        * "random" → per-coverage behavior: probabilistic +1 per cell.
+        * "score"  → global behavior: keeps the globally best sources by score,
+    ra_col, dec_col : str, optional
+        RA and DEC column names (used for deterministic tie-breaking).
+
+    Returns
+    -------
+    kept_df, dropped_df : tuple[pd.DataFrame, pd.DataFrame]
+        kept_df    : rows actually kept at this depth.
+        dropped_df : rows not written at this depth, but still available for
+                     deeper levels.
+    """
+    # Nothing to do if no data or k is non-positive
+    if selected is None or len(selected) == 0 or k_desired <= 0.0:
+        return selected, selected.iloc[0:0]
+
+    mode = (mode or "random").lower()
+
+    # ============================================================
+    # MODE "score" → GLOBAL SELECTION (rank by score, not per_cov)
+    # ============================================================
+    if mode == "score":
+        if "__icov__" not in selected.columns:
+            # Fallback to random if __icov__ is missing
+            mode = "random"
+        else:
+            n_cov = int(selected["__icov__"].nunique())
+            if n_cov == 0:
+                return selected.iloc[0:0], selected
+
+            # Compute the total expected number of sources for this depth
+            # (fractional k times number of coverage cells)
+            k_total_desired = float(k_desired) * float(n_cov)
+
+            # Round and cap to available number of rows
+            n_sel = len(selected)
+            n_keep = int(round(k_total_desired))
+            n_keep = max(0, min(n_keep, n_sel))
+
+            if n_keep == 0:
+                return selected.iloc[0:0], selected
+
+            # Sort globally by score, using RA/DEC as deterministic tie-breakers
+            asc = (not order_desc)
+            sort_cols = [score_col]
+            ascending = [asc]
+
+            if ra_col is not None and ra_col in selected.columns:
+                sort_cols.append(ra_col)
+                ascending.append(True)
+            if dec_col is not None and dec_col in selected.columns:
+                sort_cols.append(dec_col)
+                ascending.append(True)
+
+            selected_sorted = selected.sort_values(
+                sort_cols,
+                ascending=ascending,
+                kind="mergesort",
+            )
+
+            kept_df = selected_sorted.iloc[:n_keep]
+            dropped_df = selected_sorted.iloc[n_keep:]
+            return kept_df, dropped_df
+
+    # ============================================================
+    # MODE "random" → per-coverage uniform sampling
+    # ============================================================
+    # In this mode each coverage cell behaves independently:
+    # we keep floor(k_desired) rows for sure, and one additional
+    # row with probability equal to the fractional part.
+    k_floor_global = math.floor(k_desired)
+    frac = k_desired - k_floor_global
+
+    # If k is effectively integer → nothing to adjust
+    if frac <= 1e-9:
+        return selected, selected.iloc[0:0]
+
+    rng = np.random.default_rng()
+    kept_parts = []
+    dropped_parts = []
+
+    for icov, g in selected.groupby("__icov__"):
+        n_avail = len(g)
+        if n_avail == 0:
+            continue
+
+        k_local_desired = min(k_desired, float(n_avail))
+        k_floor = int(math.floor(k_local_desired))
+        k_floor = max(0, k_floor)
+
+        if k_floor > 0:
+            base_keep = g.iloc[:k_floor]
+        else:
+            base_keep = g.iloc[0:0]
+
+        remaining = g.iloc[k_floor:]
+
+        extra_keep = 0
+        frac_local = max(0.0, min(1.0, k_local_desired - float(k_floor)))
+        if len(remaining) > 0 and frac_local > 0.0:
+            u = rng.random()
+            if u < frac_local:
+                extra_keep = 1
+
+        if extra_keep == 1:
+            extra_row = remaining.iloc[:1]  # best of the remaining
+            final_keep = pd.concat([base_keep, extra_row], ignore_index=False)
+            final_drop = remaining.iloc[1:]
+        else:
+            final_keep = base_keep
+            final_drop = remaining
+
+        if len(final_keep) > 0:
+            kept_parts.append(final_keep)
+        if len(final_drop) > 0:
+            dropped_parts.append(final_drop)
+
+    kept_df = pd.concat(kept_parts, ignore_index=False) if kept_parts else selected.iloc[0:0]
+    dropped_df = pd.concat(dropped_parts, ignore_index=False) if dropped_parts else selected.iloc[0:0]
+
+    return kept_df, dropped_df
+
+
 # =============================================================================
-# Pipeline
+# Pipeline (per_cov-only)
 # =============================================================================
 
 def run_pipeline(cfg: Config) -> None:
     out_dir = Path(cfg.output.out_dir)
     _mkdirs(out_dir)
 
-    # ------------------ logging local ------------------
     t0 = time.time()
     log_lines: List[str] = []
 
     def _log(msg: str, always: bool = False):
-        """
-        Grava mensagem com timestamp em memória e imprime no stdout.
-        - always=True: loga mesmo se print_info=False
-        - always=False: só loga se print_info=True (para "infos do print")
-        """
-        if always or cfg.algorithm.print_info:
+        """Log message with timestamp to stdout and to the in-memory log buffer."""
+        if always:
+            line = f"{_ts()} | {msg}"
+            print(line)
+            log_lines.append(line)
+        else:
+            # In this simplified version we always log when called.
             line = f"{_ts()} | {msg}"
             print(line)
             log_lines.append(line)
 
-    _log(f"START HiPS pipeline: cat_name={cfg.output.cat_name} out_dir={out_dir}", always=True)
-    _log(f"Config -> lM={cfg.algorithm.level_limit} lC={cfg.algorithm.level_coverage} order_desc={cfg.algorithm.order_desc}", always=True)
-    # ---------------------------------------------------
+    _log(f"START HiPS catalog pipeline: cat_name={cfg.output.cat_name} out_dir={out_dir}", always=True)
+    _log(
+        f"Config -> lM={cfg.algorithm.level_limit} "
+        f"lC={cfg.algorithm.level_coverage} "
+        f"Oc={cfg.algorithm.coverage_order} "
+        f"order_desc={cfg.algorithm.order_desc}",
+        always=True,
+    )
 
-    # CDS-like validations
+    # CDS-like validation for level_limit
     if not (4 <= int(cfg.algorithm.level_limit) <= 11):
         raise ValueError("level_limit (lM) must be within [4, 11] to mirror the CDS tool.")
+
     if cfg.algorithm.level_coverage > cfg.algorithm.level_limit:
         cfg.algorithm.level_coverage = cfg.algorithm.level_limit
         _log("WARNING: level_coverage was > level_limit; set lC = lM", always=True)
@@ -1112,47 +1036,72 @@ def run_pipeline(cfg: Config) -> None:
     assert len(paths) > 0, "No input files matched."
 
     _log(f"Matched {len(paths)} input files", always=True)
-    _log("Some input files: " + ", ".join(paths[:3]) + (" ..." if len(paths) > 3 else ""), always=True)
+    _log(
+        "Some input files: "
+        + ", ".join(paths[:3])
+        + (" ..." if len(paths) > 3 else ""),
+        always=True,
+    )
 
-    # Build DDF (optionally with __src__ if debug.origin=True).
-    ddf, RA_NAME, DEC_NAME, keep_cols = _build_input_ddf(paths, cfg, _log)
-
-    # --- Optional: stabilize partition sizes and keep data hot in memory ---
-    # Aim for ~128–512MB per partition; adjust to your cluster.
+    # Build DDF and stabilize partitions
+    ddf, RA_NAME, DEC_NAME, keep_cols = _build_input_ddf(paths, cfg)
     ddf = ddf.repartition(partition_size="256MB").persist()
     wait(ddf)
+
+    # Add coverage cell index (__icov__) at coverage_order
+    Oc = int(cfg.algorithm.coverage_order)
+    NSIDE_C = 1 << Oc
+
+    def _add_icov(pdf: pd.DataFrame, ra_col: str, dec_col: str) -> pd.DataFrame:
+        if len(pdf) == 0:
+            pdf["__icov__"] = pd.Series([], dtype="int64")
+            return pdf
+        theta = np.deg2rad(90.0 - pd.to_numeric(pdf[dec_col], errors="coerce").to_numpy())
+        phi = np.deg2rad((pd.to_numeric(pdf[ra_col], errors="coerce").to_numpy()) % 360.0)
+        icov = hp.ang2pix(NSIDE_C, theta, phi, nest=True).astype(np.int64)
+        pdf["__icov__"] = icov
+        return pdf
+
+    meta_with_icov = ddf._meta.copy()
+    meta_with_icov["__icov__"] = pd.Series([], dtype="int64")
+    ddf = ddf.map_partitions(_add_icov, RA_NAME, DEC_NAME, meta=meta_with_icov)
 
     # Column report
     nhh_dir = out_dir / "nhhtree"
     _mkdirs(nhh_dir)
-    report = compute_column_report(ddf)
-    _write_text(nhh_dir / "metadata.info", json.dumps(report, indent=2))
+    #report = compute_column_report(ddf)
+    #_write_text(nhh_dir / "metadata.info", json.dumps(report, indent=2))
 
-    # Densmaps for depths 0..lM (+ write densmap fits up to 12)
+    # Densmaps 0..lM + FITS (computed in parallel)
+    from dask import compute as dask_compute
+
     depths = list(range(0, cfg.algorithm.level_limit + 1))
     densmaps: Dict[int, np.ndarray] = {}
-    for d in depths:
-        densmaps[d] = densmap_for_depth(ddf, RA_NAME, DEC_NAME, depth=d)
-        write_densmap_fits(out_dir, d, densmaps[d])
 
+    # Build delayed densmaps for all depths
+    delayed_maps = {
+        d: densmap_for_depth_delayed(ddf, RA_NAME, DEC_NAME, depth=d)
+        for d in depths
+    }
+
+    # Compute all in a single Dask graph execution
+    computed = dask_compute(*delayed_maps.values())
+
+    # Fill dict and write FITS files
+    for d, dens in zip(delayed_maps.keys(), computed):
+        densmaps[d] = dens
+        write_densmap_fits(out_dir, d, dens)
+
+    # Coverage densmap used for the MOC
     dens_lc = densmaps[cfg.algorithm.level_coverage]
-
-    # Optional informational prints (like -p/--print_info)
-    if cfg.algorithm.print_info:
-        total_rows = int(densmaps[0].sum())
-        _log(f"[INFO] Total input rows (depth 0) = {total_rows}")
-        for d in depths[1:]:
-            cnt = int(densmaps[d].sum())
-            nonempty = int((densmaps[d] > 0).sum())
-            _log(f"[INFO] Depth {d}: total rows={cnt}, non-empty pixels={nonempty}")
 
     # MOC
     write_moc(out_dir, cfg.algorithm.level_coverage, dens_lc)
 
     # metadata.xml / Metadata.xml
-    cols = [(c, str(ddf[c].dtype), None) for c in ddf.columns]
-    ra_idx = list(ddf.columns).index(RA_NAME)
-    dec_idx = list(ddf.columns).index(DEC_NAME)
+    cols = [(c, str(ddf[c].dtype), None) for c in keep_cols]
+    ra_idx = keep_cols.index(RA_NAME)
+    dec_idx = keep_cols.index(DEC_NAME)
     write_metadata_xml(out_dir, cols, ra_idx, dec_idx)
 
     # properties
@@ -1163,11 +1112,12 @@ def run_pipeline(cfg: Config) -> None:
         cfg.output.target,
         cfg.algorithm.level_limit,
         n_src_total,
-        tile_format="tsv"
+        tile_format="tsv",
     )
 
     # arguments
-    arg_text = textwrap.dedent(f"""
+    arg_text = textwrap.dedent(
+        f"""
         # Input/output
         Input files: {paths}
         Input type: {cfg.input.format}
@@ -1176,190 +1126,219 @@ def run_pipeline(cfg: Config) -> None:
         Catalogue name: {cfg.output.cat_name}
         RA column name: {RA_NAME}
         DE column name: {DEC_NAME}
-        # Selection parameters
-        simple_algo: {cfg.algorithm.simple_algo}
-        order_desc: {cfg.algorithm.order_desc}
-        method: {cfg.algorithm.method}
+        # Selection parameters (coverage-based)
         level_limit(lM): {cfg.algorithm.level_limit}
         level_coverage(lC): {cfg.algorithm.level_coverage}
-        n1: {cfg.algorithm.n1}
-        n2: {cfg.algorithm.n2}
-        n3_min: {cfg.algorithm.n3_min}
-        n3_max: {cfg.algorithm.n3_max}
-        nm (>= d4 min): {cfg.algorithm.nm}
-        nM (>= d4 max): {cfg.algorithm.nM}
-        no (quota base): {cfg.algorithm.no}
-        rl3l4 (l3 quota ratio): {cfg.algorithm.rl3l4}
-        l1l2_only: {cfg.algorithm.l1l2_only}
-        print_info: {cfg.algorithm.print_info}
+        coverage_order(Oc): {cfg.algorithm.coverage_order}
+        order_desc: {cfg.algorithm.order_desc}
+        k_per_cov_per_level: {cfg.algorithm.k_per_cov_per_level}
+        targets_total_per_level: {cfg.algorithm.targets_total_per_level}
         tie_buffer: {cfg.algorithm.tie_buffer}
-    """).strip("\n")
-
+        density_mode: {cfg.algorithm.density_mode}
+        k_per_cov_initial: {cfg.algorithm.k_per_cov_initial}
+        density_exp_base: {cfg.algorithm.density_exp_base}
+        """
+    ).strip("\n")
     write_arguments(out_dir, arg_text + "\n")
 
-    # =========================
-    # DEBUG: hashes do input
-    # =========================
-    input_hash_set = None
-    MAG_COL = "MAG_AUTO_I_DERED"  # ajuste se seu score usar outro
-    if cfg.debug.containment_check and (MAG_COL in ddf.columns):
-        _log("[DEBUG] Building input hash set for containment check...", always=True)
-        input_hashes = ddf.map_partitions(
-            lambda pdf: _canon_hash_pdf(pdf, RA_NAME, DEC_NAME, MAG_COL),
-            meta=("h","object")
-        ).dropna().drop_duplicates().compute()
-        input_hash_set = set(input_hashes.tolist())
-        _log(f"[DEBUG] Input unique hashes: {len(input_hash_set)}", always=True)
 
-    # =========================
-    # DEBUG: ranges por partição
-    # =========================
-    if cfg.debug.ranges_check:
-        def _ranges(pdf):
-            return pd.DataFrame({
-                "RA_min":[pd.to_numeric(pdf[RA_NAME], errors='coerce').min()],
-                "RA_max":[pd.to_numeric(pdf[RA_NAME], errors='coerce').max()],
-                "DEC_min":[pd.to_numeric(pdf[DEC_NAME], errors='coerce').min()],
-                "DEC_max":[pd.to_numeric(pdf[DEC_NAME], errors='coerce').max()],
-                "n":[len(pdf)]
-            })
-        try:
-            rng = ddf.map_partitions(_ranges).compute()
-            # Exemplo de janela esperada; ajuste conforme seu recorte:
-            off = rng[(rng["DEC_max"] > 20.0) | (rng["DEC_min"] < -80.0)]
-            if len(off):
-                _log(f"[DEBUG] Partitions outside expected DEC window:\n{off.sort_values('DEC_max', ascending=False).head(10)}", always=True)
-        except Exception as e:
-            _log(f"[DEBUG] ranges_check failed: {type(e).__name__}: {e}", always=True)
-
-    # -------------------------------------------------------------------------
-    # Progressive tiling loop (top-down) — 2-pass with global thresholds:
-    #   1) produce candidates per partition (top q+buffer per ipix, stable keys)
-    #   2) reduce globally per ipix (top q+buffer again)
-    #   3) cut exactly q with deterministic tie-break and write once per Npix
-    #   4) build thresholds from selected and filter remainder strictly worse
-    # -------------------------------------------------------------------------
-    
-    # Precompute coverage maps from lC densmap
-    coverage_by_depth = compute_coverage_pct_for_depths(
-        cfg.algorithm.level_limit, cfg.algorithm.level_coverage, dens_lc
-    )
-    
-    # Start with full input as remainder at depth 1
+    # =====================================================================
+    # Coverage-based selection: uniform expected k per coverage (__icov__), no duplicates
+    # =====================================================================
     remainder_ddf = ddf
-    
+
+    # If the base expected density and all per-level overrides are non-positive,
+    # there is nothing to select.
+    if (
+        float(cfg.algorithm.k_per_cov_initial) <= 0.0
+        and not (cfg.algorithm.k_per_cov_per_level or {})
+    ):
+        _log(
+            "[selection] k_per_cov_initial <= 0 and no per-level overrides → "
+            "nothing to select; finishing early.",
+            always=True,
+        )
+        # graceful shutdown
+        try:
+            client.close()
+        except Exception:
+            pass
+        try:
+            cluster.close()
+        except Exception:
+            pass
+        t1 = time.time()
+        _log(f"END HiPS catalog pipeline. Elapsed {_fmt_dur(t1 - t0)}", always=True)
+        try:
+            with (out_dir / "process.log").open("a", encoding="utf-8") as f:
+                f.write("\n".join(log_lines) + "\n")
+        except Exception as e:
+            _log(f"{_ts()} | ERROR writing process.log: {type(e).__name__}: {e}")
+        return
+
+    Tmap = cfg.algorithm.targets_total_per_level or {}
+
     for depth in range(1, cfg.algorithm.level_limit + 1):
         depth_t0 = time.time()
-        _log(f"[DEPTH {depth}] start")
-        _log(f"Generating tiles for depth={depth}")
-    
-        # Densmap for the CURRENT remainder at this depth
-        counts = densmap_for_depth(remainder_ddf, RA_NAME, DEC_NAME, depth=depth)
-    
-        # Compute per-pixel quotas with coverage shaping
-        quotas = compute_quotas_for_depth(
-            depth, counts, cfg.algorithm, coverage_pct=coverage_by_depth.get(depth)
+
+        # Choose k for this level: density profile + per-level overrides
+        # -----------------------------------------------------------------
+        # 1) Base k_desired from the density profile (can be fractional)
+        # -----------------------------------------------------------------
+        algo = cfg.algorithm
+        mode = (getattr(algo, "density_mode", "constant") or "constant").lower()
+
+        # Depth index for the profile (start at 1)
+        delta = max(0, depth - 1)
+
+        k0 = float(algo.k_per_cov_initial)
+
+        if mode == "constant":
+            k_desired = k0
+        elif mode == "linear":
+            # Grows linearly with depth (1×, 2×, 3×, ...)
+            k_desired = k0 * float(1 + delta)
+        elif mode == "exp":
+            # Grows exponentially with depth
+            base = float(getattr(algo, "density_exp_base", 2.0))
+            if base <= 1.0:
+                base = 2.0
+            k_desired = k0 * (base ** float(delta))
+        elif mode == "log":
+            # Grows roughly like log2(depth + const)
+            k_desired = k0 * math.log2(delta + 2.0)
+        else:
+            raise ValueError(f"Unknown density_mode: {algo.density_mode!r}")
+
+        # 2) Per-level override (if provided) always wins over the profile
+        if algo.k_per_cov_per_level and depth in algo.k_per_cov_per_level:
+            k_desired = float(algo.k_per_cov_per_level[depth])
+
+        # Ensure non-negative
+        k_desired = max(0.0, float(k_desired))
+
+        # Log initial desired k for this level (before global caps)
+        _log(
+            f"[DEPTH {depth}] start (density_mode={mode}, k_desired={k_desired:.4f})",
+            always=True,
         )
-        keep_quotas_path = str(out_dir / f".keep_quotas_o{depth}.npy")
-        np.save(keep_quotas_path, quotas)
-    
-        # ------------- Pass 1: produce candidates (no I/O) -------------
-        # Build a meta DataFrame that matches the *full* output schema:
-        # tile columns (same dtypes as ddf) + __ipix__ (int64) + __score__ (float64)
-        meta_cols = {c: pd.Series(dtype=ddf[c].dtype) for c in ddf.columns}
-        meta_cols["__ipix__"] = pd.Series(dtype="int64")
-        meta_cols["__score__"] = pd.Series(dtype="float64")
+        _log_depth_stats(_log, depth, "start", counts=densmaps[depth])
+
+        # Optionally apply a global total cap T_L for this level:
+        #   - If T_L is set, we compute cap_per_cov = T_L / N_cov_nonempty,
+        #     where N_cov_nonempty is the number of coverage cells (__icov__)
+        #     that still have data in the current remainder.
+        #   - The effective k_desired is then min(k_desired, cap_per_cov).
+        if depth in Tmap:
+            T_L = float(Tmap[depth])
+            try:
+                n_cov = int(remainder_ddf["__icov__"].dropna().nunique().compute())
+            except Exception:
+                n_cov = 0
+
+            if n_cov > 0 and T_L > 0.0:
+                cap_per_cov = T_L / float(n_cov)
+                if cap_per_cov < k_desired:
+                    _log(
+                        f"[DEPTH {depth}] applying total cap: T_L={int(T_L)}, "
+                        f"N_cov={n_cov} → cap_per_cov={cap_per_cov:.4f} "
+                        f"(before k_desired={k_desired:.4f})",
+                        always=True,
+                    )
+                    k_desired = cap_per_cov
+            else:
+                _log(
+                    f"[DEPTH {depth}] cannot apply total cap: "
+                    f"T_L={T_L}, N_cov={n_cov}",
+                    always=True,
+                )
+
+        # If after capping k_desired <= 0, there is nothing to select at this level.
+        if k_desired <= 0.0:
+            _log(f"[DEPTH {depth}] k_desired <= 0 → skipping this depth", always=True)
+            continue
+
+        # We still need an integer ceiling for the candidate selection phase:
+        # we select up to k_int rows per coverage cell, then let the fractional
+        # part decide (probabilistically) whether to keep the "extra" row.
+        k_int = max(1, int(math.ceil(k_desired)))
+
+        # Narrow DF to needed columns (from remainder)
+        needed_cols = list(remainder_ddf.columns)
+        if cfg.columns.score not in needed_cols:
+            needed_cols.append(cfg.columns.score)
+        if "__icov__" not in needed_cols:
+            needed_cols.append("__icov__")
+        sel_ddf = remainder_ddf[needed_cols]
+
+        # Partition-level candidate pass: keep (k + tie_buffer) per __icov__
+        meta_cols = {c: sel_ddf._meta[c] for c in sel_ddf.columns}
         meta_cand = pd.DataFrame(meta_cols)
-    
-        candidates_ddf = remainder_ddf.map_partitions(
-            produce_candidates_partition,
-            depth,
-            RA_NAME,
-            DEC_NAME,
-            keep_quotas_path,
-            cfg.algorithm.order_desc,
-            [*list(ddf.columns), cfg.columns.score],
-            int(cfg.algorithm.tie_buffer),
+
+        cand_ddf = sel_ddf.map_partitions(
+            _candidates_by_coverage_partition,
+            score_col=cfg.columns.score,
+            order_desc=cfg.algorithm.order_desc,
+            # Use integer ceiling for the candidate set per coverage cell.
+            k_per_cov=k_int,
+            tie_buffer=int(cfg.algorithm.tie_buffer),
+            ra_col=RA_NAME,
+            dec_col=DEC_NAME,
             meta=meta_cand,
         )
-    
-        # ------------- Pass 2 (in-Dask): reduce to (q + buffer) per ipix -------------
-        # Keep the same meta used in Pass 1 (tile columns + __ipix__ + __score__)
-        def _reduce_group(pdf: pd.DataFrame,
-                          quotas_path: str,
-                          ra_col: str,
-                          dec_col: str,
-                          order_desc_flag: bool,
-                          tie_buf: int) -> pd.DataFrame:
-            if len(pdf) == 0:
-                return pdf
-            quotas = np.load(quotas_path, mmap_mode="r")
-            sort_cols = ["__score__", ra_col, dec_col]
-            ascending = [not order_desc_flag, True, True]
-            out = []
-            for pid, g in pdf.groupby("__ipix__"):
-                p = int(pid)
-                if p < 0 or p >= len(quotas):
-                    continue
-                q = int(quotas[p])
-                if q <= 0 or len(g) == 0:
-                    continue
-                k_buf = q + int(tie_buf)
-                gg = g.sort_values(sort_cols, ascending=ascending, kind="mergesort").head(k_buf)
-                out.append(gg)
-            if not out:
-                return pdf.iloc[0:0]
-            return pd.concat(out, ignore_index=True)
 
-        # Repartition by '__ipix__' for co-location, then reduce inside each partition
-        # This prevents the driver from seeing the full candidates set.
-        candidates_reduced_ddf = (
-            candidates_ddf
-            .shuffle("__ipix__", npartitions=max(8, ddf.npartitions))
-            .map_partitions(
-                _reduce_group,
-                keep_quotas_path,
-                RA_NAME,
-                DEC_NAME,
-                cfg.algorithm.order_desc,
-                int(cfg.algorithm.tie_buffer),
-                meta=meta_cand,  # same schema as Pass 1's meta
-            )
+        # Shuffle and exact cut to k per __icov__
+        target_parts = cfg.cluster.n_workers * cfg.cluster.threads_per_worker * 2
+        cand_ddf = cand_ddf.shuffle(
+            "__icov__",
+            npartitions=max(target_parts, sel_ddf.npartitions)
         )
+        cand_pdf = cand_ddf.compute()
+        _log_depth_stats(_log, depth, "candidates", candidates_len=len(cand_pdf))
 
-        # Bring the already-reduced set to pandas (bounded by q+buffer per ipix)
-        reduced_pdf = candidates_reduced_ddf.compute()
-    
-        # ------------- Final selection: cut exactly q with stable tie-break -------------
-        # Sort per ipix with stable key; keep exactly quota q (or <= count)
-        sort_cols = ["__score__", RA_NAME, DEC_NAME]
-        ascending = [not cfg.algorithm.order_desc, True, True]
-        selected_parts = []
-        for pid, g in reduced_pdf.groupby("__ipix__"):
-            q = int(quotas[int(pid)]) if 0 <= int(pid) < len(quotas) else 0
-            if q <= 0 or len(g) == 0:
-                continue
-            gg = g.sort_values(sort_cols, ascending=ascending, kind="mergesort").head(q)
-            selected_parts.append(gg)
-        selected_pdf = pd.concat(selected_parts, ignore_index=True) if selected_parts else reduced_pdf.iloc[0:0]
+        selected_pdf = _reduce_coverage_exact(
+            cand_pdf,
+            score_col=cfg.columns.score,
+            order_desc=cfg.algorithm.order_desc,
+            # Again, we use k_int here; fractional part is applied later.
+            k_per_cov=k_int,
+            ra_col=RA_NAME,
+            dec_col=DEC_NAME,
+        )
+        _log_depth_stats(_log, depth, "selected_before_fractional", selected_len=len(selected_pdf))
 
-        # =========================
-        # DEBUG: containment check
-        # =========================
-        if cfg.debug.containment_check and (input_hash_set is not None) and (MAG_COL in selected_pdf.columns):
-            try:
-                sel_h = _canon_hash_pdf(selected_pdf, RA_NAME, DEC_NAME, MAG_COL)
-                bad_mask = ~sel_h.isin(list(input_hash_set))
-                if bool(bad_mask.any()):
-                    bad = selected_pdf.loc[bad_mask, [RA_NAME, DEC_NAME, MAG_COL, "__ipix__"] + ([ "__src__"] if "__src__" in selected_pdf.columns else [])]
-                    _log(f"[BUG?] {len(bad)} selected rows are NOT in input. Sample:\n{bad.head(5)}", always=True)
-            except Exception as e:
-                _log(f"[DEBUG] containment_check failed at depth {depth}: {type(e).__name__}: {e}", always=True)
+        # -----------------------------------------------------------------
+        # 2bis) Apply fractional k: implement expected k_desired per coverage
+        # -----------------------------------------------------------------
+        # This step randomly drops some of the selected rows so that the
+        # *expected* number of kept rows per coverage cell is k_desired.
+        # Dropped rows are not written at this level and remain available
+        # for deeper levels (because the remainder filter uses thresholds
+        # computed only from the finally kept set).
+        selected_pdf, _dropped_pdf = apply_fractional_k_per_cov(
+            selected_pdf,
+            k_desired=k_desired,
+            score_col=cfg.columns.score,
+            order_desc=cfg.algorithm.order_desc,
+            mode=getattr(cfg.algorithm, "fractional_mode", "random"),
+            ra_col=RA_NAME,
+            dec_col=DEC_NAME,
+        )
+        _log_depth_stats(_log, depth, "selected", selected_len=len(selected_pdf))
 
-    
-        # ------------- Write once per Npix (atomic) + optional Allsky -------------
-        header_line = "\t".join([str(c) for c in ddf.columns]) + "\n"
+        # Map selected rows to ipix for this order
+        if len(selected_pdf) > 0:
+            theta = np.deg2rad(90.0 - selected_pdf[DEC_NAME].to_numpy())
+            phi = np.deg2rad((selected_pdf[RA_NAME] % 360.0).to_numpy())
+            NSIDE_L = 1 << depth
+            ipixL = hp.ang2pix(NSIDE_L, theta, phi, nest=True).astype(np.int64)
+            selected_pdf["__ipix__"] = ipixL
+
+        # Write tiles + Allsky(1/2)
+        header_line = build_header_line_from_keep(keep_cols)
+        counts = densmaps[depth]
         allsky_needed = (depth in (1, 2))
+
         written_per_ipix, allsky_df = finalize_write_tiles(
             out_dir=out_dir,
             depth=depth,
@@ -1372,42 +1351,31 @@ def run_pipeline(cfg: Config) -> None:
             stage_dir=Path(os.environ.get("SLURM_TMPDIR", "/tmp")),
             allsky_collect=allsky_needed,
         )
-    
-        # ------------- Allsky.tsv from selected (only L1/L2) -------------
+        _log_depth_stats(_log, depth, "written", counts=densmaps[depth], written=written_per_ipix)
+
         if allsky_needed and allsky_df is not None and len(allsky_df) > 0:
             norder_dir = out_dir / f"Norder{depth}"
             norder_dir.mkdir(parents=True, exist_ok=True)
-
             tmp_allsky = norder_dir / ".Allsky.tsv.tmp"
             final_allsky = norder_dir / "Allsky.tsv"
 
-            # Totals for completeness header
             nsrc_tot = int(counts.sum())
             nwritten_tot = int(sum(written_per_ipix.values())) if written_per_ipix else 0
             nremaining_tot = max(0, nsrc_tot - nwritten_tot)
             completeness_header_allsky = f"# Completeness = {nremaining_tot} / {nsrc_tot}\n"
 
-            # Derive the exact header order from the already-written header_line.
-            # This guarantees that data columns match the header 1:1.
             header_cols = header_line.strip("\n").split("\t")
             allsky_cols = [c for c in header_cols if c in allsky_df.columns]
-
-            # Keep the Allsky dataframe strictly in the same column order as the header.
             df_as = allsky_df[allsky_cols].copy()
 
-            # 1) Write completeness + header once (text mode)
             with tmp_allsky.open("w", encoding="utf-8", newline="") as f:
                 f.write(completeness_header_allsky)
                 f.write(header_line)
 
-            # Sanitize string columns to avoid embedded tabs/newlines breaking TSV rows
             obj_cols = df_as.select_dtypes(include=["object", "string"]).columns
             if len(obj_cols) > 0:
                 df_as[obj_cols] = df_as[obj_cols].replace({r"[\t\r\n]": " "}, regex=True)
 
-            # 2) Append rows using pandas.to_csv for robust serialization.
-            #    - Prevents truncated/partial first data line.
-            #    - Uses '\t' separator and '\n' line terminator.
             df_as.to_csv(
                 tmp_allsky,
                 sep="\t",
@@ -1416,43 +1384,45 @@ def run_pipeline(cfg: Config) -> None:
                 mode="a",
                 encoding="utf-8",
                 lineterminator="\n",
-                float_format=None  # keep pandas' default precision (no forced rounding)
             )
-
-            # 3) Atomic replace to finalize the file
             os.replace(tmp_allsky, final_allsky)
-    
-        # ------------- Early stop if requested -------------
-        if cfg.algorithm.l1l2_only and depth == 2:
-            _log("l1l2_only=True → stopping após Norder2.")
+
+        # Build per-coverage thresholds and filter remainder
+        thr_cov = build_cov_thresholds(
+            selected_pdf,
+            score_col=cfg.columns.score,
+            order_desc=cfg.algorithm.order_desc,
+        )
+        if len(thr_cov) == 0:
+            _log(f"[INFO] Depth {depth}: nothing selected; stopping selection loop.", always=True)
             break
-    
-        # ------------- Build thresholds (from final selected) and filter remainder -------------
-        thresholds = build_thresholds(selected_pdf, cfg.algorithm.order_desc)
-        if len(thresholds) == 0:
-            if cfg.algorithm.print_info:
-                _log(f"[INFO] Depth {depth}: no selection happened, stopping.")
-            break
-    
+
         remainder_ddf = remainder_ddf.map_partitions(
-            filter_remainder_partition,
-            depth,
-            RA_NAME,
-            DEC_NAME,
-            cfg.columns.score,
-            cfg.algorithm.order_desc,
-            thresholds,
+            filter_remainder_by_coverage_partition,
+            score_expr=cfg.columns.score,
+            order_desc=cfg.algorithm.order_desc,
+            thr_cov=thr_cov,
+            ra_col=RA_NAME,
+            dec_col=DEC_NAME,
             meta=remainder_ddf._meta,
         )
-    
-        if cfg.algorithm.print_info:
-            wrote_total = int(sum(written_per_ipix.values())) if written_per_ipix else 0
-            _log(f"[INFO] Depth {depth} finalized: wrote={wrote_total}, available(remainder)={int(counts.sum())}")
-    
-        depth_elapsed = time.time() - depth_t0
-        _log(f"[DEPTH {depth}] done in {_fmt_dur(depth_elapsed)}")
 
-    # graceful shutdown to avoid CommClosedError noise
+        remainder_ddf = remainder_ddf.persist()
+        wait(remainder_ddf)
+
+        # Optionally compute remainder size (can be expensive on huge datasets)
+        #rem_len = None
+        #if depth == 1 or depth == cfg.algorithm.level_limit:
+        #    try:
+        #        rem_len = int(remainder_ddf.shape[0].compute())
+        #    except Exception:
+        #        rem_len = None
+        #
+        #_log_depth_stats(_log, depth, "filtered", remainder_len=rem_len)
+
+        _log(f"[DEPTH {depth}] done in {_fmt_dur(time.time() - depth_t0)}", always=True)
+
+    # graceful shutdown
     try:
         client.close()
     except Exception:
@@ -1464,17 +1434,14 @@ def run_pipeline(cfg: Config) -> None:
 
     t1 = time.time()
     elapsed = t1 - t0
-    _log(f"END HiPS pipeline. Elapsed {_fmt_dur(elapsed)} ({elapsed:.3f} s)", always=True)
-    
-    # Persistir log no arquivo (append para manter histórico de execuções)
+    _log(f"END HiPS catalog pipeline. Elapsed {_fmt_dur(elapsed)} ({elapsed:.3f} s)", always=True)
+
+    # persist log
     try:
         with (out_dir / "process.log").open("a", encoding="utf-8") as f:
             f.write("\n".join(log_lines) + "\n")
     except Exception as e:
-        # Se algo falhar ao gravar o log, ao menos notificar no stdout
-        _log(f"{_ts()} | ERROR writing process.log: {type(e).__name__}: {e}")
-
-    _log("Done.")
+        _log(f"{_ts()} | ERROR writing process.log: {type(e).__name__}: {e}", always=True)
 
 
 # =============================================================================
@@ -1484,12 +1451,38 @@ def run_pipeline(cfg: Config) -> None:
 def load_config(path: str) -> Config:
     with open(path, "r", encoding="utf-8") as f:
         y = yaml.safe_load(f)
+
+    algo = y["algorithm"]
+
+    # --- coverage / MOC orders ---
+    level_limit = int(algo["level_limit"])
+
+    raw_level_coverage = algo.get("level_coverage")
+    raw_coverage_order = algo.get("coverage_order")
+
+    # If only one of level_coverage / coverage_order is provided, use it for the other.
+    if raw_level_coverage is None and raw_coverage_order is None:
+        # Default: use level_limit for both if neither is explicitly given
+        raw_level_coverage = level_limit
+        raw_coverage_order = level_limit
+    elif raw_level_coverage is None:
+        raw_level_coverage = raw_coverage_order
+    elif raw_coverage_order is None:
+        raw_coverage_order = raw_level_coverage
+
+    level_coverage = int(raw_level_coverage)
+    coverage_order = int(raw_coverage_order)
+
+    # --- density / selection parameters ---
+    density_mode = algo.get("density_mode", "constant")
+    k_per_cov_initial = float(algo["k_per_cov_initial"]) if "k_per_cov_initial" in algo else 1.0
+
     cfg = Config(
         input=InputCfg(
             paths=y["input"]["paths"],
             format=y["input"].get("format", "parquet"),
             header=y["input"].get("header", True),
-            ascii_format=y["input"].get("ascii_format"),  # optional; CSV/TSV only
+            ascii_format=y["input"].get("ascii_format"),
         ),
         columns=ColumnsCfg(
             ra=y["columns"]["ra"],
@@ -1498,22 +1491,32 @@ def load_config(path: str) -> Config:
             keep=y["columns"].get("keep"),
         ),
         algorithm=AlgoOpts(
-            simple_algo=y["algorithm"].get("simple_algo", False),
-            order_desc=y["algorithm"].get("order_desc", False),
-            method=y["algorithm"].get("method", "LOG"),
-            level_limit=int(y["algorithm"]["level_limit"]),
-            level_coverage=int(y["algorithm"]["level_coverage"]),
-            n1=int(y["algorithm"].get("n1", 3000)),
-            n2=int(y["algorithm"].get("n2", 6000)),
-            n3_min=int(y["algorithm"].get("n3_min", 3)),
-            n3_max=int(y["algorithm"].get("n3_max", 30000)),
-            no=int(y["algorithm"].get("no", 500)),
-            nm=int(y["algorithm"].get("nm", 50)),
-            nM=int(y["algorithm"].get("nM", 500)),
-            rl3l4=float(y["algorithm"].get("rl3l4", 0.2)),
-            l1l2_only=bool(y["algorithm"].get("l1l2_only", False)),
-            print_info=bool(y["algorithm"].get("print_info", False)),
-            tie_buffer=int(y["algorithm"].get("tie_buffer", 16)),
+            level_limit=level_limit,
+            level_coverage=level_coverage,
+            order_desc=bool(algo.get("order_desc", False)),
+            coverage_order=coverage_order,
+
+            # Optional per-level overrides: convert keys to int and values to float.
+            k_per_cov_per_level=(
+                {int(k): float(v) for k, v in algo.get("k_per_cov_per_level", {}).items()}
+                if isinstance(algo.get("k_per_cov_per_level"), dict)
+                else None
+            ),
+
+            # Total caps per level remain integers (total rows per level).
+            targets_total_per_level=(
+                {int(k): int(v) for k, v in algo.get("targets_total_per_level", {}).items()}
+                if isinstance(algo.get("targets_total_per_level"), dict)
+                else None
+            ),
+
+            tie_buffer=int(algo.get("tie_buffer", 10)),
+
+            density_mode=density_mode,
+            k_per_cov_initial=k_per_cov_initial,
+            density_exp_base=float(algo.get("density_exp_base", 2.0)),
+
+            fractional_mode=algo.get("fractional_mode", "random"),
         ),
         cluster=ClusterCfg(
             mode=y["cluster"].get("mode", "local"),
@@ -1527,22 +1530,20 @@ def load_config(path: str) -> Config:
             cat_name=y["output"]["cat_name"],
             target=y["output"].get("target", "0 0"),
         ),
-        debug=DebugCfg(
-            origin=bool(y.get("debug", {}).get("origin", False)),
-            ranges_check=bool(y.get("debug", {}).get("ranges_check", False)),
-            containment_check=bool(y.get("debug", {}).get("containment_check", False)),
-        ),
     )
 
-    # Sanity check: align lC if user set it above lM
+    # Align lC if user set it above lM
     if cfg.algorithm.level_coverage > cfg.algorithm.level_limit:
         cfg.algorithm.level_coverage = cfg.algorithm.level_limit
+
     return cfg
-    
+
 
 def main(argv: List[str]):
     import argparse
-    ap = argparse.ArgumentParser(description="HiPS Catalog Pipeline (Dask, Parquet, CDS-faithful + methods)")
+    ap = argparse.ArgumentParser(
+        description="HiPS Catalog Pipeline (Dask, Parquet, coverage-based selection)"
+    )
     ap.add_argument("--config", required=True, help="YAML configuration file")
     args = ap.parse_args(argv)
     cfg = load_config(args.config)

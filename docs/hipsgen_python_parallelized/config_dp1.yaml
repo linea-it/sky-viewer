@@ -1,0 +1,242 @@
+# =============================================================================
+# HiPS Catalog Pipeline — config.yaml
+# =============================================================================
+# Configuration file for Hipsgen-cat.py
+#
+# This pipeline:
+#   - reads a large input catalog (Parquet / CSV / TSV),
+#   - distributes it with Dask,
+#   - selects sources per HEALPix coverage cell (__icov__),
+#   - writes HiPS-compliant tiles (Norder*/Dir*/Npix*.tsv),
+#   - produces MOC, densmaps, metadata, and logs.
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# Input catalog(s)
+# -----------------------------------------------------------------------------
+input:
+  # One or more glob patterns for input files.
+  paths:
+    - "/scratch/users/luigi.silva/data_preparation_results/lsst_dp1/DP_run_LSST_DP1_mag_cModelFlux_sfd_2025-10-29_15-57/data/*.parquet"
+
+  # File format: "parquet", "csv", or "tsv".
+  format: parquet
+
+  # For CSV/TSV:
+  #   header: true  → first row has column names
+  #   header: false → no header; RA/DEC/score can then be given as 1-based indices
+  # header: true
+
+  # Optional hint for ASCII formats ("CSV" or "TSV"); usually not needed.
+  # ascii_format: CSV
+
+
+# -----------------------------------------------------------------------------
+# Column mapping and score definition
+# -----------------------------------------------------------------------------
+columns:
+  # RA/DEC columns; can be names (for Parquet or CSV with header)
+  # or 1-based indices as strings (e.g., "1", "2") for ASCII without header.
+  ra: coord_ra
+  dec: coord_dec
+
+  # Score used to rank sources within each coverage cell and tile.
+  # - It can be a simple column name (e.g., "MAG_I").
+  # - Or a Python expression using existing columns, e.g.:
+  #     "(FLUX_R / ERR_R)**2"
+  # - With order_desc: false, lower scores are better (ascending).
+  # - With order_desc: true, higher scores are better (descending).
+  score: "i_cModelMag_dered"
+
+  # Optional explicit list of columns to keep in the output tiles.
+  # If omitted, the pipeline will:
+  #   - keep RA, DEC, and all columns required by "score",
+  #   - plus all other input columns in their original order.
+  keep:
+    - objectId
+    - detect_fromBlend
+    - detect_isDeblendedModelSource
+    - detect_isIsolated
+    - refExtendedness
+    - tract
+    - patch
+    - u_cModelMag_dered
+    - u_cModelMagErr_dered
+    - g_cModelMag_dered
+    - g_cModelMagErr_dered
+    - r_cModelMag_dered
+    - r_cModelMagErr_dered
+    - i_cModelMag_dered
+    - i_cModelMagErr_dered
+    - z_cModelMag_dered
+    - z_cModelMagErr_dered
+    - y_cModelMag_dered
+    - y_cModelMagErr_dered
+
+# -----------------------------------------------------------------------------
+# Algorithmic controls
+# -----------------------------------------------------------------------------
+algorithm:
+  # --------------------------
+  # HiPS / coverage depth
+  # --------------------------
+  # level_limit: maximum HiPS order (NorderL).
+  # Tiles are produced for Norder=1..level_limit.
+  level_limit: 11
+
+  # level_coverage: HEALPix order used for:
+  #   - the coverage/MOC generation,
+  #   - densmap_o<order>.fits used for the MOC.
+  # If only one of level_coverage / coverage_order is given in the YAML,
+  # the code will use that value for the other as a default.
+  level_coverage: 10
+
+  # coverage_order: HEALPix order used to define __icov__ coverage cells.
+  # Higher values → smaller cells → finer uniformity control.
+  coverage_order: 10
+
+  # order_desc:
+  #   false → ascending score (lower is better)
+  #   true  → descending score (higher is better)
+  order_desc: false
+
+  # --------------------------
+  # Density control
+  # --------------------------
+  # density_mode controls how the expected number of rows per coverage
+  # cell varies with depth:
+  #
+  #   "constant" → same expected density at all depths
+  #   "linear"   → grows linearly with depth
+  #   "exp"      → grows exponentially with depth
+  #   "log"      → grows slowly, ~log(depth)
+  #
+  # At each depth, the pipeline computes a "k_desired" which is the
+  # expected number of rows per coverage cell (__icov__), before
+  # per-level overrides and global caps are applied.
+  density_mode: "exp"
+
+  # k_per_cov_initial:
+  #   Expected number of rows per coverage cell (__icov__) at depth = 1.
+  #   This is the base of the density profile.
+  #
+  # Example:
+  #   - constant, k_per_cov_initial: 1.0 → ~1 row per coverage cell at all depths
+  #   - exp, k_per_cov_initial: 0.05 → very sparse at shallow depth, denser at deep
+  k_per_cov_initial: 0.05
+
+  # density_exp_base:
+  #   Only used when density_mode: "exp".
+  #   Controls how quickly the density grows with depth.
+  #   Example: base=2 → roughly doubles per depth.
+  density_exp_base: 2
+
+  # k_per_cov_per_level:
+  #   Optional per-depth hard overrides for k_desired.
+  #   Keys are depths (Norder), values are floats (can be fractional).
+  #   If defined for a given depth, this overrides density_mode/k_per_cov_initial
+  #   at that depth.
+  #
+  # Example (uncomment to use):
+  # k_per_cov_per_level:
+  #   3: 0.5      # depth 3: ~0.5 expected rows per coverage cell
+  #   5: 2.0      # depth 5: ~2.0 expected rows per coverage cell
+  #   7: 5.0
+
+  # targets_total_per_level:
+  #   Optional global caps on the TOTAL number of rows at each depth.
+  #   Keys are depths (Norder), values are total row counts (integers).
+  #
+  # For a given depth L:
+  #   - Let N_cov = number of coverage cells (__icov__) with data left.
+  #   - The pipeline computes:
+  #       cap_per_cov = targets_total_per_level[L] / N_cov
+  #   - Then k_desired = min(k_desired, cap_per_cov).
+  #
+  # This preserves per-coverage behavior but enforces a total ceiling.
+  #
+  # Example (uncomment to use):
+  # targets_total_per_level:
+  #   1: 1000
+  #   2: 2000
+  #   3: 4000
+
+  # fractional_mode:
+  #   Controls how the fractional part of k_desired is handled.
+  #
+  #   "random":
+  #       - Uniform per-coverage behavior.
+  #       - For each coverage cell, the pipeline keeps floor(k_desired)
+  #         rows for sure, plus one extra row with probability equal to
+  #         the fractional part.
+  #       - This tends to preserve global uniformity in __icov__.
+  #
+  #   "score":
+  #       - Global best-score behavior.
+  #       - The pipeline computes the total desired number of rows:
+  #           k_total_desired ≈ k_desired * N_cov
+  #         then rounds it, and globally keeps the best rows by score
+  #         (RA/DEC used as tie-breakers).
+  #       - This can break strict per-coverage uniformity, but guarantees
+  #         that the deepest cuts follow the score field globally.
+  fractional_mode: "score"   # or "random"
+
+  # tie_buffer:
+  #   Extra candidates per coverage cell around the cutoff.
+  #   Internally, partitions keep (ceil(k_desired) + tie_buffer) rows
+  #   per __icov__ before the exact reduction and fractional adjustment.
+  #   Small values (2–10) help avoid artifacts near the cutoff.
+  tie_buffer: 2
+
+
+# -----------------------------------------------------------------------------
+# Dask cluster settings
+# -----------------------------------------------------------------------------
+cluster:
+  # mode:
+  #   "local" → LocalCluster on the current node.
+  #   "slurm" → SLURMCluster via dask_jobqueue (requires a working SLURM env).
+  mode: slurm
+
+  # Number of workers and threads per worker.
+  # The optimal choice depends on the machine / SLURM partition.
+  n_workers: 20
+  threads_per_worker: 8
+
+  # Memory per worker (Dask "memory_limit"), as a string recognized by Dask,
+  # e.g. "4GB", "8GB", "12GB".
+  memory_per_worker: "12GB"
+
+  # SLURM-specific options (used only when mode: "slurm").
+  slurm:
+    # SLURM partition / queue name.
+    queue: "cpu_small"         # e.g., cpu_dev | cpu_small | cpu
+
+    # SLURM account / project.
+    account: "hpc-bpglsst"
+
+    # Extra SLURM directives passed to dask_jobqueue's SLURMCluster.
+    job_extra_directives:
+      - "--partition=cpu_small"
+      - "--time=02:00:00"
+    # Examples of other directives you might add:
+    #   - "--constraint=..." 
+    #   - "--qos=..."
+    #   - "--mem=0"             # use all node memory (if allowed)
+
+
+# -----------------------------------------------------------------------------
+# Output location and metadata
+# -----------------------------------------------------------------------------
+output:
+  # Root directory where the HiPS structure will be written.
+  out_dir: "/scratch/users/luigi.silva/hipsgencat/LSST_DP1"
+
+  # Catalogue / HiPS name; used in properties and path names.
+  cat_name: "LSST_DP1"
+
+  # Initial sky position for visualization tools (degrees).
+  # Used only in the properties file.
+  # Format: "<RA0> <DEC0>"
+  target: "0 0"
