@@ -5,7 +5,7 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 /**
  * Hook para controlar o Aladin Lite, aguardando a lib A estar disponível.
  */
-export function useAladin(aladinParams = {}, userGroups = [], baseHost) {
+export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
   const containerRef = useRef(null);
   const aladinRef = useRef(null);
   const [isReady, setIsReady] = useState(false);
@@ -55,6 +55,17 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost) {
       name: 'DES DR2 at LIneA',
       url: 'https://datasets.linea.org.br/data/releases/des/dr2/catalogs/hips/',
       options: { color: '#33ff42' }
+    },
+    {
+      id: 'des_dr2_teste',
+      name: 'DES DR2 SAMPLE TEST',
+      url: 'https://skyviewer-dev.linea.org.br/data/DES_DR2_small_sample/',
+      options: {
+        color: '#2BC7EE',
+        requestCredentials: 'include',
+        requestMode: 'cors',
+      },
+      devOnly: true,
     },
     // // Adiciona catálogo LSST DP0.2 (privado)
     // {
@@ -134,6 +145,11 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost) {
           return; // Não adiciona o survey se o usuário não tiver acesso
         }
 
+        if (survey.devOnly == true && isDev == false) {
+          // console.warn(`Survey ${survey.name} is only available in dev mode.`);
+          return; // Não adiciona o survey se não estiver em modo dev
+        }
+
         const hips_survey = aladinRef.current.createImageSurvey(survey.id, survey.name, survey.url, survey.cooFrame);
 
         aladinRef.current.setImageSurvey(hips_survey, survey.options || {});
@@ -148,6 +164,12 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost) {
           // console.warn(`User does not have access to catalog: ${cat.name}`);
           return; // Não adiciona o catálogo se o usuário não tiver acesso
         }
+
+        if (cat.devOnly == true && isDev == false) {
+          // console.warn(`Survey ${survey.name} is only available in dev mode.`);
+          return; // Não adiciona o survey se não estiver em modo dev
+        }
+
         const hips_cat = A.catalogHiPS(cat.url, {
           name: cat.name,
           onClick: 'showTable',

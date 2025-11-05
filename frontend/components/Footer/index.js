@@ -13,6 +13,7 @@ import SupportImage from '../SupportImage';
 import Image from 'next/image';
 
 function Footer() {
+  const currentYear = new Date().getFullYear();
   return (
     <footer>
       <Box sx={{ padding: '32px 0' }}>
@@ -146,7 +147,7 @@ function Footer() {
                   secretaria@linea.org.br
                 </Link>
               </Typography>
-              <Typography variant="body1">
+              <Typography variant="body1" ml={2}>
                 tel:{' '}
                 <Link
                   href="tel:+5521969379224"
@@ -231,7 +232,7 @@ function Footer() {
             variant="body2"
             sx={{ mt: '40px', textAlign: 'center', color: '#a3a3a3', fontSize: '0.875rem' }}
           >
-            LIneA - 2024 - All rights reserved |{' '}
+            LIneA - {currentYear} - All rights reserved |{' '}
             <Link
               href="https://www.linea.org.br/politica-de-privacidade"
               target="_blank"
