@@ -33,11 +33,6 @@ export default function Header() {
       target: '_blank',
     },
     {
-      description: 'Documentation',
-      href: 'https://docs.linea.org.br/',
-      target: '_blank',
-    },
-    {
       description: 'Contact',
       href: settings?.is_dev ? 'https://scienceplatform-dev.linea.org.br/lsp/contact' : 'https://scienceplatform.linea.org.br/lsp/contact',
       target: '_blank',
@@ -96,7 +91,16 @@ export default function Header() {
             ))}
           </List>
           <Chip label="Beta" variant="outlined" color="warning" size="small" />
+
           <Box sx={{ flexGrow: 1 }} />
+
+          <Button href="https://data.linea.org.br/" color="inherit" variant="outlined" sx={{ mr: 2 }} size="small">
+            Data
+          </Button>
+          <Button href="https://docs.linea.org.br/" color="inherit" variant="outlined" size="small" sx={{ mr: 4 }}>
+            Docs
+          </Button>
+
           {user && (
             <LoggedUser username={user?.username} />
           )}

@@ -21,7 +21,7 @@ export default function Home() {
       flexGrow: 1,
       minHeight: 'calc(100vh - 64px)'
     }}>
-      {isClient ? <Aladin userGroups={user?.groups || []} baseHost={settings?.base_host} /> : 'Loading'}
+      {isClient ? <Aladin userGroups={user?.groups || []} baseHost={settings?.base_host} isDev={settings?.is_dev} /> : 'Loading'}
     </Box>
   );
 }
