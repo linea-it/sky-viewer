@@ -42,36 +42,50 @@ Usage:
 
 from __future__ import annotations
 
-import os
-import sys
-import json
-import time
+# =============================================================================
+# Standard library
+# =============================================================================
+import argparse
 import glob
+import json
 import math
+import os
+import re
 import shutil
+import sys
 import textwrap
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Dict, Optional, Callable
+from typing import Callable, Dict, List, Optional
 
-import yaml
+# =============================================================================
+# Third-party libraries
+# =============================================================================
+import dask.dataframe as dd
 import numpy as np
 import pandas as pd
-import dask.dataframe as dd
+import yaml
+import healpy as hp
+
+from dask import compute as dask_compute
+from dask import delayed as _delayed
 from dask.distributed import Client, LocalCluster, wait
 
 try:
-    from dask_jobqueue import SLURMCluster  # optional
+    from dask_jobqueue import SLURMCluster  # optional for cluster execution
 except Exception:
     SLURMCluster = None
 
-import healpy as hp
-
 from astropy.io import fits
-from astropy.table import Table
 from astropy.io.votable import from_table, writeto as vot_writeto
-
+from astropy.table import Table
 from mocpy import MOC
+
+# =============================================================================
+# Internal aliases and numpy underscore variant (for clarity in delayed ops)
+# =============================================================================
+import numpy as _np
 
 
 # =============================================================================
@@ -244,7 +258,6 @@ def _log_depth_stats(
 # -----------------------------------------------------------------------------
 # Score dependency extraction and column resolution
 # -----------------------------------------------------------------------------
-import re
 _ID_RE = re.compile(r"[A-Za-z_]\w*")
 
 
@@ -351,7 +364,7 @@ def _build_input_ddf(paths: List[str], cfg: Config) -> tuple[dd.DataFrame, str, 
 # Column report
 # =============================================================================
 
-def compute_column_report(ddf: dd.DataFrame, sample_rows: int = 200_000) -> Dict:
+def compute_column_report_sample(ddf: dd.DataFrame, sample_rows: int = 200_000) -> Dict:
     """Build a small column summary on a sample (keeps it fast and scalable)."""
     sample = ddf.sample(
         frac=min(1.0, sample_rows / max(1, len(ddf.columns) * 10_000)),
@@ -379,6 +392,72 @@ def compute_column_report(ddf: dd.DataFrame, sample_rows: int = 200_000) -> Dict
     return {"columns": report}
 
 
+def compute_column_report_global(ddf: dd.DataFrame) -> Dict:
+    """
+    Build a column summary using *global* statistics computed with Dask
+    (no sampling).
+
+    For each column this returns:
+      - dtype
+      - n_null: total number of null values (global)
+      - if numeric: min, max, mean (global)
+      - if non-numeric: example (one non-null example value, if any)
+    """
+    report: Dict[str, Dict] = {}
+
+    dtypes = ddf.dtypes.to_dict()
+
+    tasks = []
+    task_keys = []  # (column_name, field_name)
+
+    for col, dt in dtypes.items():
+        s = ddf[col]
+
+        # Always compute n_null
+        tasks.append(s.isna().sum())
+        task_keys.append((col, "n_null"))
+
+        # Numeric → global min/max/mean
+        if np.issubdtype(dt, np.number):
+            tasks.append(s.min())
+            task_keys.append((col, "min"))
+
+            tasks.append(s.max())
+            task_keys.append((col, "max"))
+
+            tasks.append(s.mean())
+            task_keys.append((col, "mean"))
+        else:
+            # For non-numeric: get one non-null example (if any)
+            # dropna() on a Dask Series returns a Dask Series as well
+            tasks.append(s.dropna().head(1))
+            task_keys.append((col, "example"))
+
+    # Execute all aggregations in a single Dask graph compute
+    results = dask_compute(*tasks)
+
+    # Rebuild the output dictionary
+    tmp: Dict[str, Dict] = {}
+    for (col, field), value in zip(task_keys, results):
+        if col not in tmp:
+            tmp[col] = {"dtype": str(dtypes[col])}
+
+        if field == "example":
+            # value is a pandas Series with up to 1 element
+            try:
+                v = value.iloc[0]
+            except (IndexError, AttributeError):
+                v = ""
+            tmp[col]["example"] = str(v)
+        elif field in ("min", "max", "mean"):
+            tmp[col][field] = float(value) if value is not None else np.nan
+        elif field == "n_null":
+            tmp[col]["n_null"] = int(value)
+
+    report["columns"] = tmp
+    return report
+
+
 # =============================================================================
 # HEALPix helpers & density maps
 # =============================================================================
@@ -398,8 +477,6 @@ def densmap_for_depth_delayed(ddf: dd.DataFrame, ra_col: str, dec_col: str, dept
     Returns a Dask delayed object which, when computed, yields
     a NumPy vector with counts per NESTED pixel at the given depth.
     """
-    import numpy as _np
-    from dask import delayed as _delayed
 
     nside = 1 << depth
     npix = hp.nside2npix(nside)
@@ -1154,15 +1231,19 @@ def run_pipeline(cfg: Config) -> None:
     meta_with_icov["__icov__"] = pd.Series([], dtype="int64")
     ddf = ddf.map_partitions(_add_icov, RA_NAME, DEC_NAME, meta=meta_with_icov)
 
-    # Column report
-    nhh_dir = out_dir / "nhhtree"
-    _mkdirs(nhh_dir)
-    #report = compute_column_report(ddf)
+    # Column report sample
+    #nhh_dir = out_dir / "nhhtree"
+    #_mkdirs(nhh_dir)
+    #report = compute_column_report_sample(ddf)
+    #_write_text(nhh_dir / "metadata.info", json.dumps(report, indent=2))
+
+    # Column report global
+    #nhh_dir = out_dir / "nhhtree"
+    #_mkdirs(nhh_dir)
+    #report = compute_column_report_global(ddf)
     #_write_text(nhh_dir / "metadata.info", json.dumps(report, indent=2))
 
     # Densmaps 0..lM + FITS (computed in parallel)
-    from dask import compute as dask_compute
-
     depths = list(range(0, cfg.algorithm.level_limit + 1))
     densmaps: Dict[int, np.ndarray] = {}
 
@@ -1677,7 +1758,6 @@ def load_config(path: str) -> Config:
 
 
 def main(argv: List[str]):
-    import argparse
     ap = argparse.ArgumentParser(
         description="HiPS Catalog Pipeline (Dask, Parquet, coverage-based selection)"
     )
