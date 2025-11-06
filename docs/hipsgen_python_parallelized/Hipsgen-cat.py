@@ -153,7 +153,8 @@ class ClusterCfg:
     threads_per_worker: int
     memory_per_worker: str     # e.g. "8GB"
     slurm: Optional[Dict] = None
-    materialize_in_memory: bool = False  # default: low-memory mode
+    persist_ddfs: bool = False  # default: low-memory mode
+    avoid_computes_wherever_possible: bool = True  # default: low-memory mode
 
 
 @dataclass
@@ -833,6 +834,50 @@ def _reduce_coverage_exact(
     return pd.concat(out, ignore_index=True) if out else pdf.iloc[0:0]
 
 
+def _reduce_coverage_exact_dask(
+    ddf: dd.DataFrame,
+    score_col: str,
+    order_desc: bool,
+    k_per_cov: int,
+    ra_col: str,
+    dec_col: str,
+) -> dd.DataFrame:
+    """
+    Dask-based equivalent of _reduce_coverage_exact for the scalar k_per_cov case.
+
+    It keeps up to k_per_cov rows per coverage cell (__icov__), with the same
+    sorting and tie-breaking rules as the pandas implementation:
+      - sort by score_col, then RA, then DEC
+      - if there are fewer than k_per_cov rows in a cell, keep all of them.
+
+    This function assumes k_per_cov is a scalar (integer). The current pipeline
+    uses a single k_int for all coverage cells, so this matches the existing logic.
+    """
+    if k_per_cov <= 0:
+        # Return an empty dask dataframe with the same schema
+        empty_meta = ddf._meta
+        return ddf.map_partitions(lambda pdf: pdf.iloc[0:0], meta=empty_meta)
+
+    asc = (not order_desc)
+
+    def _take_topk(g: pd.DataFrame) -> pd.DataFrame:
+        if g.empty:
+            return g
+        g_sorted = g.sort_values(
+            [score_col, ra_col, dec_col],
+            ascending=[asc, True, True],
+            kind="mergesort",
+        )
+        # If len(g) < k_per_cov, head(k_per_cov) simply returns the whole group.
+        return g_sorted.head(int(k_per_cov))
+
+    meta = ddf._meta
+    return ddf.groupby("__icov__", group_keys=False).apply(
+        _take_topk,
+        meta=meta,
+    )
+
+
 def apply_fractional_k_per_cov(
     selected: pd.DataFrame,
     k_desired: float,
@@ -1045,15 +1090,27 @@ def run_pipeline(cfg: Config) -> None:
 
     _log(f"Dask dashboard: {client.dashboard_link}", always=True)
 
-    # Decide whether to aggressively materialize intermediates in memory.
-    # By default we stay in low-memory mode (materialize_in_memory = False),
-    # and only if the user explicitly enables it in the config we use persist()
-    # to speed things up at the cost of higher RAM usage.
-    materialize_in_memory = bool(getattr(cfg.cluster, "materialize_in_memory", False))
-    if materialize_in_memory:
-        _log("[cluster] materialize_in_memory=True → will persist large intermediates in memory", always=True)
+    # Decide how aggressively we use memory vs. computes.
+    # By default we stay in low-memory mode (persist_ddfs = False and avoid_computes_wherever_possible = True).
+    persist_ddfs = bool(getattr(cfg.cluster, "persist_ddfs", False))
+    avoid_computes = bool(getattr(cfg.cluster, "avoid_computes_wherever_possible", True))
+
+    if persist_ddfs:
+        _log("[cluster] persist_ddfs=True → will persist large intermediates in memory", always=True)
     else:
-        _log("[cluster] materialize_in_memory=False (low-memory mode)", always=True)
+        _log("[cluster] persist_ddfs=False (lower memory consumption)", always=True)
+
+    if avoid_computes:
+        _log(
+            "[cluster] avoid_computes_wherever_possible=True → will try to avoid large .compute() calls "
+            "whenever possible (using more Dask-native operations) (lower memory consumption)",
+            always=True,
+        )
+    else:
+        _log(
+            "[cluster] avoid_computes_wherever_possible=False → keep standard behaviour for computes.",
+            always=True,
+        )
 
     # Input
     paths: List[str] = []
@@ -1075,7 +1132,7 @@ def run_pipeline(cfg: Config) -> None:
 
     # In high-throughput mode we keep the repartitioned dataframe in memory.
     # In low-memory mode we let Dask stream from disk/out-of-core as needed.
-    if materialize_in_memory:
+    if persist_ddfs:
         ddf = ddf.persist()
         wait(ddf)
 
@@ -1318,25 +1375,64 @@ def run_pipeline(cfg: Config) -> None:
             meta=meta_cand,
         )
 
-        # Shuffle and exact cut to k per __icov__
+        # Shuffle so that rows with the same __icov__ are co-located and
+        # groupby operations are efficient and deterministic.
         target_parts = cfg.cluster.n_workers * cfg.cluster.threads_per_worker * 2
         cand_ddf = cand_ddf.shuffle(
             "__icov__",
             npartitions=max(target_parts, sel_ddf.npartitions)
         )
-        cand_pdf = cand_ddf.compute()
-        _log_depth_stats(_log, depth, "candidates", candidates_len=len(cand_pdf))
 
-        selected_pdf = _reduce_coverage_exact(
-            cand_pdf,
-            score_col=cfg.columns.score,
-            order_desc=cfg.algorithm.order_desc,
-            # Again, we use k_int here; fractional part is applied later.
-            k_per_cov=k_int,
-            ra_col=RA_NAME,
-            dec_col=DEC_NAME,
-        )
-        _log_depth_stats(_log, depth, "selected_before_fractional", selected_len=len(selected_pdf))
+        # ------------------------------------------------------------------
+        # Two modes controlled only by avoid_computes_wherever_possible:
+        #   1) "Avoid computes wherever possible" mode (avoid_computes=True, standard):
+        #        - selected_ddf = _reduce_coverage_exact_dask(cand_ddf, ...)
+        #        - selected_pdf = selected_ddf.compute()
+        #   2) Use intermediate computes (avoid_computes=False):
+        #        - cand_pdf = cand_ddf.compute()
+        #        - selected_pdf = _reduce_coverage_exact(cand_pdf, ...)
+        # ------------------------------------------------------------------
+        if avoid_computes:
+            # Avoid materializing the full candidate set; we only materialize
+            # the final per-depth selection, which should be much smaller.
+            selected_ddf = _reduce_coverage_exact_dask(
+                cand_ddf,
+                score_col=cfg.columns.score,
+                order_desc=cfg.algorithm.order_desc,
+                k_per_cov=k_int,
+                ra_col=RA_NAME,
+                dec_col=DEC_NAME,
+            )
+
+            selected_pdf = selected_ddf.compute()
+            # In this mode we skip logging the candidate count to avoid
+            # an extra .compute() on cand_ddf.shape[0].
+            _log_depth_stats(
+                _log,
+                depth,
+                "selected_before_fractional",
+                selected_len=len(selected_pdf),
+            )
+        else:
+            # Original behaviour: materialize candidates first, then reduce.
+            cand_pdf = cand_ddf.compute()
+            _log_depth_stats(_log, depth, "candidates", candidates_len=len(cand_pdf))
+
+            selected_pdf = _reduce_coverage_exact(
+                cand_pdf,
+                score_col=cfg.columns.score,
+                order_desc=cfg.algorithm.order_desc,
+                # Again, we use k_int here; fractional part is applied later.
+                k_per_cov=k_int,
+                ra_col=RA_NAME,
+                dec_col=DEC_NAME,
+            )
+            _log_depth_stats(
+                _log,
+                depth,
+                "selected_before_fractional",
+                selected_len=len(selected_pdf),
+            )
 
         # -----------------------------------------------------------------
         # 2bis) Apply fractional k: implement expected k_desired per coverage
@@ -1441,7 +1537,7 @@ def run_pipeline(cfg: Config) -> None:
         # Persist the filtered remainder only when we explicitly want
         # high in-memory performance. In low-memory mode we avoid
         # materializing this large dataframe in RAM.
-        if materialize_in_memory:
+        if persist_ddfs:
             remainder_ddf = remainder_ddf.persist()
             wait(remainder_ddf)
 
@@ -1560,8 +1656,11 @@ def load_config(path: str) -> Config:
             threads_per_worker=int(y["cluster"].get("threads_per_worker", 1)),
             memory_per_worker=str(y["cluster"].get("memory_per_worker", "4GB")),
             slurm=y["cluster"].get("slurm"),
-            # New optional flag to control in-memory materialization
-            materialize_in_memory=bool(y["cluster"].get("materialize_in_memory", False)),
+            # Optional flags to control how aggressively we use memory vs. computes
+            persist_ddfs=bool(y["cluster"].get("persist_ddfs", False)),
+            avoid_computes_wherever_possible=bool(
+                y["cluster"].get("avoid_computes_wherever_possible", True)
+            ),
         ),
         output=OutputCfg(
             out_dir=y["output"]["out_dir"],

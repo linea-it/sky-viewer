@@ -194,39 +194,48 @@ algorithm:
 # Dask cluster settings
 # -----------------------------------------------------------------------------
 cluster:
-  # mode:
-  #   "local" → LocalCluster on the current node.
-  #   "slurm" → SLURMCluster via dask_jobqueue (requires a working SLURM env).
+  # "local" → LocalCluster on the current node
+  # "slurm" → SLURMCluster via dask_jobqueue (requires a working SLURM environment)
   mode: slurm
 
-  # Number of workers and threads per worker.
-  # The optimal choice depends on the machine / SLURM partition.
+  # Number of workers and threads per worker
   n_workers: 20
   threads_per_worker: 8
 
-  # Memory per worker (Dask "memory_limit"), as a string recognized by Dask,
-  # e.g. "4GB", "8GB", "12GB".
+  # Memory limit per worker (string recognized by Dask, e.g., "4GB", "12GB")
   memory_per_worker: "12GB"
 
-  # If you are in a cluster with a lot of RAM (larger than the catalog size), choose true for maximum efficiency.
-  # materialize_in_memory: false  # default
+  # ----------------------------
+  # Performance / memory tuning
+  # ----------------------------
+  # Recommended presets:
+  #   • Low-memory mode  → persist_ddfs: false, avoid_computes_wherever_possible: true
+  #   • High-throughput mode → persist_ddfs: true, avoid_computes_wherever_possible: false
+  #
+  # These flags are independent and can be combined as needed.
 
-  # SLURM-specific options (used only when mode: "slurm").
+  persist_ddfs: false         # If true → keep large Dask DataFrames (ddf, remainder_ddf)
+                              # persisted in memory to improve speed (requires ample RAM).
+                              # If false → stream from disk (safer for limited-memory setups).
+
+  avoid_computes_wherever_possible: true
+                              # If true → favor Dask-native operations and delay `.compute()`
+                              # calls on large DataFrames (lower RAM usage, slightly slower).
+                              # If false → materialize more intermediates in memory for speed.
+
+  # ----------------------------
+  # SLURM-specific options (used only when mode: "slurm")
+  # ----------------------------
   slurm:
-    # SLURM partition / queue name.
-    queue: "cpu_small"         # e.g., cpu_dev | cpu_small | cpu
-
-    # SLURM account / project.
-    account: "hpc-bpglsst"
-
-    # Extra SLURM directives passed to dask_jobqueue's SLURMCluster.
+    queue: "cpu_small"         # SLURM partition/queue (e.g., cpu_dev | cpu_small | cpu)
+    account: "hpc-bpglsst"     # SLURM account or project name
     job_extra_directives:
       - "--partition=cpu_small"
       - "--time=02:00:00"
-    # Examples of other directives you might add:
-    #   - "--constraint=..." 
+    # Additional examples:
+    #   - "--constraint=..."
     #   - "--qos=..."
-    #   - "--mem=0"             # use all node memory (if allowed)
+    #   - "--mem=0"   # use all node memory (if allowed)
 
 
 # -----------------------------------------------------------------------------
