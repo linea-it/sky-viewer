@@ -208,6 +208,9 @@ cluster:
   # e.g. "4GB", "8GB", "12GB".
   memory_per_worker: "12GB"
 
+  # If you are in a cluster with a lot of RAM (larger than the catalog size), choose true for maximum efficiency.
+  # materialize_in_memory: false  # default
+
   # SLURM-specific options (used only when mode: "slurm").
   slurm:
     # SLURM partition / queue name.

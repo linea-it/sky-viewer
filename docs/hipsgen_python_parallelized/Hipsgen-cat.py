@@ -153,6 +153,7 @@ class ClusterCfg:
     threads_per_worker: int
     memory_per_worker: str     # e.g. "8GB"
     slurm: Optional[Dict] = None
+    materialize_in_memory: bool = False  # default: low-memory mode
 
 
 @dataclass
@@ -1044,6 +1045,16 @@ def run_pipeline(cfg: Config) -> None:
 
     _log(f"Dask dashboard: {client.dashboard_link}", always=True)
 
+    # Decide whether to aggressively materialize intermediates in memory.
+    # By default we stay in low-memory mode (materialize_in_memory = False),
+    # and only if the user explicitly enables it in the config we use persist()
+    # to speed things up at the cost of higher RAM usage.
+    materialize_in_memory = bool(getattr(cfg.cluster, "materialize_in_memory", False))
+    if materialize_in_memory:
+        _log("[cluster] materialize_in_memory=True → will persist large intermediates in memory", always=True)
+    else:
+        _log("[cluster] materialize_in_memory=False (low-memory mode)", always=True)
+
     # Input
     paths: List[str] = []
     for p in cfg.input.paths:
@@ -1060,8 +1071,13 @@ def run_pipeline(cfg: Config) -> None:
 
     # Build DDF and stabilize partitions
     ddf, RA_NAME, DEC_NAME, keep_cols = _build_input_ddf(paths, cfg)
-    ddf = ddf.repartition(partition_size="256MB").persist()
-    wait(ddf)
+    ddf = ddf.repartition(partition_size="256MB")
+
+    # In high-throughput mode we keep the repartitioned dataframe in memory.
+    # In low-memory mode we let Dask stream from disk/out-of-core as needed.
+    if materialize_in_memory:
+        ddf = ddf.persist()
+        wait(ddf)
 
     # Add coverage cell index (__icov__) at coverage_order
     Oc = int(cfg.algorithm.coverage_order)
@@ -1422,8 +1438,13 @@ def run_pipeline(cfg: Config) -> None:
             meta=remainder_ddf._meta,
         )
 
-        remainder_ddf = remainder_ddf.persist()
-        wait(remainder_ddf)
+        # Persist the filtered remainder only when we explicitly want
+        # high in-memory performance. In low-memory mode we avoid
+        # materializing this large dataframe in RAM.
+        if materialize_in_memory:
+            remainder_ddf = remainder_ddf.persist()
+            wait(remainder_ddf)
+
 
         # Optionally compute remainder size (can be expensive on huge datasets)
         #rem_len = None
@@ -1539,6 +1560,8 @@ def load_config(path: str) -> Config:
             threads_per_worker=int(y["cluster"].get("threads_per_worker", 1)),
             memory_per_worker=str(y["cluster"].get("memory_per_worker", "4GB")),
             slurm=y["cluster"].get("slurm"),
+            # New optional flag to control in-memory materialization
+            materialize_in_memory=bool(y["cluster"].get("materialize_in_memory", False)),
         ),
         output=OutputCfg(
             out_dir=y["output"]["out_dir"],
