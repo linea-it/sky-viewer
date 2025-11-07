@@ -4,11 +4,19 @@
 # Configuration file for Hipsgen-cat.py
 #
 # This pipeline:
-#   - reads a large input catalog (Parquet / CSV / TSV),
-#   - distributes it with Dask,
+#   - reads a large input catalog (Parquet / CSV / TSV / HATS),
+#   - distributes it with Dask or LSDB (depending on format),
 #   - selects sources per HEALPix coverage cell (__icov__),
 #   - writes HiPS-compliant tiles (Norder*/Dir*/Npix*.tsv),
 #   - produces MOC, densmaps, metadata, and logs.
+#
+# The pipeline supports both traditional Dask-based catalogs (Parquet/CSV/TSV)
+# and LSDB-based HATS catalogs:
+#   * If input.format = "hats", the catalog is opened via lsdb.open_catalog().
+#   * HATS catalogs keep their native LSDB structure and spatial partitioning.
+#   * The pipeline detects and uses the existing HEALPix index 
+#     (_healpix_<order>) to derive __icov__ and density maps efficiently.
+#   * No shuffle or repartitioning is applied when using HATS catalogs.
 # =============================================================================
 
 
@@ -20,7 +28,9 @@ input:
   paths:
     - "/scratch/users/luigi.silva/data_preparation_results/lsst_dp1/DP_run_LSST_DP1_mag_cModelFlux_sfd_2025-10-29_15-57/data/*.parquet"
 
-  # File format: "parquet", "csv", or "tsv".
+  # File format: "parquet", "csv", "tsv", or "hats".
+  #   - parquet / csv / tsv → read using Dask (standard mode)
+  #   - hats                → open LSDB catalog (HATS mode)
   format: parquet
 
   # For CSV/TSV:

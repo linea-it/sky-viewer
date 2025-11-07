@@ -1,14 +1,17 @@
-# HiPS Catalog Pipeline (Dask + Parquet)
+# HiPS Catalog Pipeline (Dask + Parquet / HATS)
 
 This pipeline generates HiPS-compliant catalog hierarchies from large input tables using Dask.  
-It reproduces the general directory and metadata structure recognized by Aladin, following the logic of the CDS *hipsgen-cat.jar* tool, but implemented in Python for large-scale, parallelized workflows.
+It reproduces the general directory and metadata structure recognized by Aladin, following the logic of the CDS *Hipsgen-cat.jar* tool, but implemented in Python for large-scale, parallelized workflows.
 
 The pipeline:
-- Reads large catalogs (Parquet or CSV/TSV) in a fully parallelized way.  
+- Reads large catalogs in a fully parallelized way:
+  - Standard files: Parquet or CSV/TSV.
+  - LSDB / HATS catalogs: using `lsdb.open_catalog(...)` to keep the native partitioning.
 - Groups sources by HEALPix coverage cells (`coverage_order`) and performs uniform selection per HiPS depth (`level_limit`).  
 - Applies density-based selection rules and probabilistic sampling (`fractional_mode`).  
 - Produces HiPS-compatible outputs, including per-depth tiles (`Norder*` directories), `Allsky.tsv`, MOC files (`Moc.fits` and `Moc.json`), and metadata descriptors (`properties`, `metadata.xml`).  
-- Supports both low-memory (out-of-core) and high-throughput (in-memory) execution modes depending on cluster configuration.
+- Supports both low-memory (out-of-core) and high-throughput (in-memory) execution modes depending on cluster configuration.  
+- When using HATS/LSDB catalogs, reuses the native HEALPix nested index when present (e.g. `_healpix_<order>`) to derive coverage and density maps efficiently.
 
 ---
 
@@ -34,14 +37,14 @@ If you are running this on an **OnDemand JupyterHub** environment,
 it is recommended to install Miniconda and create the environment **inside your `$SCRIPTS` area** to avoid quota or permission issues:
 
 ```bash
-conda env create -f environment.yml -p $SCRIPTS/hipsgencat_env
+conda env create -f environment.yaml -p $SCRIPTS/hipsgencat_env
 conda activate $SCRIPTS/hipsgencat_env
 ```
 
 If you are running locally or on a standard system, simply create it with a name:
 
 ```bash
-conda env create -f environment.yml --name hipsgencat_env
+conda env create -f environment.yaml --name hipsgencat_env
 conda activate hipsgencat_env
 ```
 
@@ -59,8 +62,30 @@ Edit `config.yaml` to match your environment and data paths.
 - Choose the cluster mode: `local` (LocalCluster) or `slurm` (SLURMCluster).
 - Adjust the number of workers, memory, and parallelization settings.
 - Optionally modify algorithm parameters such as `level_limit`, `coverage_order`, and `fractional_mode`.
+- Choose the input format:
+  - `parquet`, `csv`, or `tsv` for standard flat files.
+  - `hats` when reading a HATS/LSDB catalog with `lsdb` (in this case, `input.paths` must resolve to exactly one catalog).
 
 Example configuration files are provided in the repository.
+
+### Using HATS / LSDB catalogs as input
+
+To use a HATS/LSDB catalog as input, set:
+
+```yaml
+input:
+  paths:
+    - "/path/to/catalog.hats"   # must resolve to exactly one catalog
+  format: hats
+```
+
+Notes:
+
+- The pipeline internally uses `lsdb.open_catalog(...)` and keeps a native `lsdb.catalog.Catalog` instead of a plain Dask DataFrame.
+- If the catalog index is a nested HEALPix index named like `_healpix_<order>`, the pipeline:
+  - Derives coverage cells (`__icov__`) by bit-shifting from the index to `coverage_order`.
+  - Builds density maps directly from the index when possible, avoiding recomputing HEALPix indices from RA/DEC.
+- All high-level selection logic (density profile, fractional selection, per-depth tiles, MOC, metadata) remains the same as for Parquet/CSV/TSV inputs.
 
 ---
 
@@ -78,6 +103,8 @@ The pipeline will:
 3. Perform per-depth source selection according to uniform coverage and density profiles.  
 4. Write hierarchical HiPS directories with completeness headers and metadata.  
 5. Save process logs, arguments, and configuration snapshots in the output directory.
+
+When `input.format: hats` is used, the same steps apply, but some operations (such as coverage indexing and density maps) reuse the HEALPix index from the HATS catalog for better performance and consistency.
 
 ---
 

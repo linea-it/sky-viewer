@@ -57,16 +57,21 @@ import textwrap
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Any
 
 # =============================================================================
 # Third-party libraries
 # =============================================================================
+import dask
+
 import dask.dataframe as dd
 import numpy as np
 import pandas as pd
 import yaml
 import healpy as hp
+
+import lsdb
+from lsdb.catalog import Catalog as LsdbCatalog
 
 from dask import compute as dask_compute
 from dask import delayed as _delayed
@@ -81,6 +86,8 @@ from astropy.io import fits
 from astropy.io.votable import from_table, writeto as vot_writeto
 from astropy.table import Table
 from mocpy import MOC
+
+dask.config.set({"dataframe.shuffle.method": "tasks"})
 
 # =============================================================================
 # Internal aliases and numpy underscore variant (for clarity in delayed ops)
@@ -259,7 +266,7 @@ def _log_depth_stats(
 # Score dependency extraction and column resolution
 # -----------------------------------------------------------------------------
 _ID_RE = re.compile(r"[A-Za-z_]\w*")
-
+_HEALPIX_INDEX_RE = re.compile(r"_healpix_(\d+)$")
 
 def _score_deps(score_expr: str, available: List[str]) -> List[str]:
     """
@@ -297,47 +304,166 @@ def _resolve_col_name(spec: str, ddf: dd.DataFrame, header: bool) -> str:
         return spec
 
 
+def _get_meta_df(ddf_like: Any) -> pd.DataFrame:
+    """
+    Return an empty pandas.DataFrame with the same columns/dtypes as the
+    given collection (Dask DataFrame or LSDB Catalog).
+
+    Priority:
+      1) If the object has ._meta (plain Dask DataFrame), use it.
+      2) If the object has ._ddf (LSDB Catalog), use its ._meta.
+      3) Otherwise, fall back to .head(0) if available.
+    """
+    # Plain Dask DataFrame
+    if hasattr(ddf_like, "_meta"):
+        meta = ddf_like._meta
+        if isinstance(meta, pd.DataFrame):
+            return meta
+
+    # LSDB Catalog: use underlying Dask DataFrame (_ddf) for meta only
+    if hasattr(ddf_like, "_ddf"):
+        try:
+            meta = ddf_like._ddf._meta  # type: ignore[attr-defined]
+            if isinstance(meta, pd.DataFrame):
+                return meta
+        except Exception:
+            pass
+
+    # Fallback: try .head(0)
+    try:
+        head0 = ddf_like.head(0)
+        if isinstance(head0, pd.DataFrame):
+            return head0
+    except Exception:
+        pass
+
+    # Last resort: empty DataFrame
+    return pd.DataFrame()
+
 # -----------------------------------------------------------------------------
 # Build Dask DataFrame from input files (no debug/origin in this simplified version)
 # -----------------------------------------------------------------------------
-def _build_input_ddf(paths: List[str], cfg: Config) -> tuple[dd.DataFrame, str, str, List[str]]:
+def _build_input_ddf(paths: List[str], cfg: Config) -> tuple[Any, str, str, List[str]]:
     """
+    Build the main input collection for the pipeline.
+
     Returns:
-      ddf       : Dask DataFrame ready to use
+      ddf       : Dask-like collection ready to use
+                  - dd.DataFrame for parquet/csv/tsv
+                  - lsdb.catalog.Catalog for hats
       RA_NAME  : resolved RA column name
       DEC_NAME : resolved DEC column name
       keep_cols: final ordered list of columns kept (header order for tiles)
     """
     assert len(paths) > 0, "No input files matched."
 
+    fmt = cfg.input.format.lower()
+
+    # ------------------------------------------------------------------
+    # HATS / LSDB input: use lsdb.open_catalog and keep LSDB structure
+    # ------------------------------------------------------------------
+    if fmt == "hats":
+        if len(paths) != 1:
+            raise ValueError(
+                "For input.format='hats', please specify exactly one HATS catalog "
+                "path in input.paths."
+            )
+
+        hats_path = paths[0]
+
+        # Columns explicitly requested by the user in the YAML
+        requested_keep = cfg.columns.keep or []
+
+        # Extract potential score dependencies directly from the score expression.
+        # We assume the user only uses valid column names.
+        score_expr = cfg.columns.score or ""
+        score_tokens = set(_ID_RE.findall(str(score_expr)))
+
+        # Always request RA, DEC and score dependencies
+        must_keep = [cfg.columns.ra, cfg.columns.dec, *score_tokens]
+
+        needed_cols: List[str] = []
+        seen: set[str] = set()
+        for c in [*must_keep, *requested_keep]:
+            if c and (c not in seen):
+                needed_cols.append(c)
+                seen.add(c)
+
+        # If the user did not define "keep" and score has no dependencies,
+        # we open the catalog with all columns. Otherwise we open only
+        # the requested subset.
+        if needed_cols:
+            cat0 = lsdb.open_catalog(hats_path, columns=needed_cols)
+        else:
+            cat0 = lsdb.open_catalog(hats_path)
+
+        # Resolve RA/DEC using the catalog columns (HATS always has named columns)
+        available_cols = list(cat0.columns)
+
+        ra_col = _resolve_col_name(
+            cfg.columns.ra,
+            cat0,
+            header=True,
+        )
+        dec_col = _resolve_col_name(
+            cfg.columns.dec,
+            cat0,
+            header=True,
+        )
+        RA_NAME = ra_col
+        DEC_NAME = dec_col
+
+        # Build keep_cols in a deterministic order:
+        #   - RA, DEC, score dependencies, then everything else requested.
+        score_dependencies = [c for c in score_tokens if c in available_cols]
+
+        candidate = requested_keep if requested_keep else available_cols
+        must_keep_resolved = [RA_NAME, DEC_NAME, *score_dependencies]
+
+        seen = set()
+        keep_cols: List[str] = []
+        for c in [*must_keep_resolved, *candidate]:
+            if c in available_cols and c not in seen:
+                keep_cols.append(c)
+                seen.add(c)
+
+        # Sub-select columns via LSDB API; this returns a new Catalog.
+        ddf = cat0[keep_cols]
+
+        return ddf, RA_NAME, DEC_NAME, keep_cols
+
+    # ------------------------------------------------------------------
+    # Standard Parquet / CSV / TSV input (original behaviour)
+    # ------------------------------------------------------------------
+
     # 1) Base read to discover columns and resolve RA/DEC
-    if cfg.input.format.lower() == "parquet":
+    if fmt == "parquet":
         ddf0 = dd.read_parquet(paths, engine="pyarrow")
-    elif cfg.input.format.lower() in ("csv", "tsv"):
+    elif fmt in ("csv", "tsv"):
         ascii_fmt = (cfg.input.ascii_format or "").upper().strip()
         if ascii_fmt in ("CSV", ""):
             sep = ","
         elif ascii_fmt == "TSV":
             sep = "\t"
         else:
-            sep = "," if cfg.input.format.lower() == "csv" else "\t"
+            sep = "," if fmt == "csv" else "\t"
         if cfg.input.header:
             ddf0 = dd.read_csv(paths, sep=sep, assume_missing=True)
         else:
             ddf0 = dd.read_csv(paths, sep=sep, header=None, assume_missing=True)
     else:
-        raise ValueError("Unsupported input.format; use 'parquet', 'csv', or 'tsv'.")
+        raise ValueError("Unsupported input.format; use 'parquet', 'csv', 'tsv', or 'hats'.")
 
     # Resolve RA/DEC
     ra_col = _resolve_col_name(
         cfg.columns.ra,
         ddf0,
-        header=(cfg.input.format.lower() == "parquet" or cfg.input.header),
+        header=(fmt == "parquet" or cfg.input.header),
     )
     dec_col = _resolve_col_name(
         cfg.columns.dec,
         ddf0,
-        header=(cfg.input.format.lower() == "parquet" or cfg.input.header),
+        header=(fmt == "parquet" or cfg.input.header),
     )
     RA_NAME = ra_col
     DEC_NAME = dec_col
@@ -364,54 +490,91 @@ def _build_input_ddf(paths: List[str], cfg: Config) -> tuple[dd.DataFrame, str, 
 # Column report
 # =============================================================================
 
-def compute_column_report_sample(ddf: dd.DataFrame, sample_rows: int = 200_000) -> Dict:
-    """Build a small column summary on a sample (keeps it fast and scalable)."""
-    sample = ddf.sample(
-        frac=min(1.0, sample_rows / max(1, len(ddf.columns) * 10_000)),
-        replace=False
-    ) if isinstance(ddf, dd.DataFrame) else ddf
+def compute_column_report_sample(ddf_like: Any, sample_rows: int = 200_000) -> Dict:
+    """
+    Build a small column summary on a sample (keeps it fast and scalable).
 
-    pdf = sample.head(200_000, compute=True)
-    report = {}
+    Works both for plain Dask DataFrames and for LSDB Catalogs, as long as
+    they implement a .sample(...) method and a .head(...) method that can
+    materialize a pandas.DataFrame.
+    """
+    # Try to use the native .sample(...) API whenever it exists
+    if hasattr(ddf_like, "sample"):
+        # Heuristic for the sampling fraction based on the number of columns
+        try:
+            ncols = len(getattr(ddf_like, "columns", []))
+        except Exception:
+            ncols = 0
+
+        if ncols > 0:
+            frac = min(1.0, sample_rows / max(1, ncols * 10_000))
+        else:
+            frac = 1.0
+
+        # First try the Dask/pandas-style signature (frac, replace)
+        try:
+            sample = ddf_like.sample(frac=frac, replace=False)
+        except TypeError:
+            # Some implementations may support only "n="
+            try:
+                sample = ddf_like.sample(n=int(sample_rows))
+            except Exception:
+                # Last resort: skip sampling and use the full object
+                sample = ddf_like
+    else:
+        # No sampling API available → use the full object
+        sample = ddf_like
+
+    # Materialize up to `sample_rows` rows as a pandas.DataFrame
+    try:
+        pdf = sample.head(sample_rows, compute=True)
+    except TypeError:
+        # For pandas-like .head(n) without "compute=" keyword
+        pdf = sample.head(sample_rows)
+
+    report: Dict[str, Dict[str, Any]] = {}
     for c in pdf.columns:
         s = pdf[c]
-        col = {"dtype": str(s.dtype), "n_null": int(s.isna().sum())}
+        col_info: Dict[str, Any] = {"dtype": str(s.dtype), "n_null": int(s.isna().sum())}
+
         if pd.api.types.is_numeric_dtype(s):
             if len(s):
-                col.update({
+                col_info.update({
                     "min": float(np.nanmin(s.values)),
                     "max": float(np.nanmax(s.values)),
                     "mean": float(np.nanmean(s.values)),
                 })
             else:
-                col.update({"min": np.nan, "max": np.nan, "mean": np.nan})
+                col_info.update({"min": np.nan, "max": np.nan, "mean": np.nan})
         else:
             example = next((x for x in s.values if pd.notna(x)), "")
-            col.update({"example": str(example)})
-        report[c] = col
+            col_info.update({"example": str(example)})
+
+        report[c] = col_info
+
     return {"columns": report}
 
 
-def compute_column_report_global(ddf: dd.DataFrame) -> Dict:
+def compute_column_report_global(ddf_like: Any) -> Dict:
     """
-    Build a column summary using *global* statistics computed with Dask
-    (no sampling).
+    Build a column summary using *global* statistics computed with Dask-like
+    operations (no sampling).
 
-    For each column this returns:
-      - dtype
-      - n_null: total number of null values (global)
-      - if numeric: min, max, mean (global)
-      - if non-numeric: example (one non-null example value, if any)
+    This works for:
+      - plain Dask DataFrames, and
+      - LSDB Catalogs, as long as they implement .dtypes and column access
+        via __getitem__ (ddf_like[col]) returning a Series with the usual
+        Dask-style aggregations.
     """
-    report: Dict[str, Dict] = {}
+    report: Dict[str, Dict[str, Any]] = {}
 
-    dtypes = ddf.dtypes.to_dict()
+    dtypes = ddf_like.dtypes.to_dict()
 
     tasks = []
     task_keys = []  # (column_name, field_name)
 
     for col, dt in dtypes.items():
-        s = ddf[col]
+        s = ddf_like[col]
 
         # Always compute n_null
         tasks.append(s.isna().sum())
@@ -429,7 +592,6 @@ def compute_column_report_global(ddf: dd.DataFrame) -> Dict:
             task_keys.append((col, "mean"))
         else:
             # For non-numeric: get one non-null example (if any)
-            # dropna() on a Dask Series returns a Dask Series as well
             tasks.append(s.dropna().head(1))
             task_keys.append((col, "example"))
 
@@ -437,7 +599,7 @@ def compute_column_report_global(ddf: dd.DataFrame) -> Dict:
     results = dask_compute(*tasks)
 
     # Rebuild the output dictionary
-    tmp: Dict[str, Dict] = {}
+    tmp: Dict[str, Dict[str, Any]] = {}
     for (col, field), value in zip(task_keys, results):
         if col not in tmp:
             tmp[col] = {"dtype": str(dtypes[col])}
@@ -457,7 +619,6 @@ def compute_column_report_global(ddf: dd.DataFrame) -> Dict:
     report["columns"] = tmp
     return report
 
-
 # =============================================================================
 # HEALPix helpers & density maps
 # =============================================================================
@@ -470,21 +631,53 @@ def ipix_for_depth(ra_deg: np.ndarray, dec_deg: np.ndarray, depth: int) -> np.nd
     return hp.ang2pix(nside, theta, phi, nest=True)
 
 
-def densmap_for_depth_delayed(ddf: dd.DataFrame, ra_col: str, dec_col: str, depth: int):
+def densmap_for_depth_delayed(ddf: Any, ra_col: str, dec_col: str, depth: int):
     """
     Delayed version: build a delayed HEALPix histogram at 'depth'.
 
-    Returns a Dask delayed object which, when computed, yields
-    a NumPy vector with counts per NESTED pixel at the given depth.
-    """
+    For HATS / LSDB catalogs (format: hats) with a HEALPix nested index
+    named like "_healpix_<order>", we derive the density map directly
+    from the index by bit-shifting to the requested depth.
 
+    For all other inputs we fall back to computing HEALPix pixel indices
+    from RA/DEC, preserving the original behaviour.
+    """
     nside = 1 << depth
     npix = hp.nside2npix(nside)
+
+    # Detect whether this looks like a HATS/LSDB catalog with a HEALPix index
+    meta = _get_meta_df(ddf)
+    idx_name = getattr(meta.index, "name", None)
+    base_order = None
+
+    if idx_name:
+        m = _HEALPIX_INDEX_RE.match(str(idx_name))
+        if m:
+            base_order = int(m.group(1))
+
 
     def _part_hist(pdf: pd.DataFrame) -> _np.ndarray:
         if pdf is None or len(pdf) == 0:
             return _np.zeros(npix, dtype=_np.int64)
-        ip = ipix_for_depth(pdf[ra_col].to_numpy(), pdf[dec_col].to_numpy(), depth)
+
+        # Fast path: HATS/LSDB with HEALPix nested index, and depth <= base_order
+        if (
+            base_order is not None
+            and pdf.index.name == idx_name
+            and depth <= base_order
+        ):
+            # pdf.index contains the HEALPix nested index at order base_order
+            ipix_base = pdf.index.to_numpy()
+            shift = 2 * (base_order - depth)
+            ip = (ipix_base >> shift).astype(_np.int64)
+        else:
+            # Generic path: compute HEALPix indices from RA/DEC
+            ip = ipix_for_depth(
+                pdf[ra_col].to_numpy(),
+                pdf[dec_col].to_numpy(),
+                depth,
+            )
+
         return _np.bincount(ip, minlength=npix).astype(_np.int64)
 
     # One histogram per partition
@@ -539,15 +732,6 @@ class TSVTileWriter:
 
     def cell_path(self, ipix: int) -> Path:
         return self._dir_for_ipix(ipix) / f"Npix{ipix}.tsv"
-
-    def write_finalize(self, tmp_path: Path, final_path: Path, completeness_header: str):
-        with final_path.open("wb") as fout:
-            fout.write(completeness_header.encode("utf-8"))
-        with final_path.open("ab") as fout:
-            fout.write(self.header_line.encode("utf-8"))
-            with tmp_path.open("rb") as tin:
-                shutil.copyfileobj(tin, fout)
-        tmp_path.unlink(missing_ok=True)
 
 
 # =============================================================================
@@ -705,7 +889,6 @@ def finalize_write_tiles(
     counts: np.ndarray,
     selected: pd.DataFrame,
     order_desc: bool,
-    stage_dir: Optional[Path] = None,
     allsky_collect: bool = False,
 ) -> tuple[Dict[int, int], Optional[pd.DataFrame]]:
     """
@@ -912,13 +1095,13 @@ def _reduce_coverage_exact(
 
 
 def _reduce_coverage_exact_dask(
-    ddf: dd.DataFrame,
+    ddf_like: Any,
     score_col: str,
     order_desc: bool,
     k_per_cov: int,
     ra_col: str,
     dec_col: str,
-) -> dd.DataFrame:
+) -> Any:
     """
     Dask-based equivalent of _reduce_coverage_exact for the scalar k_per_cov case.
 
@@ -927,13 +1110,19 @@ def _reduce_coverage_exact_dask(
       - sort by score_col, then RA, then DEC
       - if there are fewer than k_per_cov rows in a cell, keep all of them.
 
-    This function assumes k_per_cov is a scalar (integer). The current pipeline
-    uses a single k_int for all coverage cells, so this matches the existing logic.
+    This function accepts:
+      - a plain Dask DataFrame, or
+      - an LSDB Catalog, in which case the underlying ._ddf is used directly
+        to avoid interfering with LSDB's higher-level semantics.
     """
     if k_per_cov <= 0:
-        # Return an empty dask dataframe with the same schema
-        empty_meta = ddf._meta
-        return ddf.map_partitions(lambda pdf: pdf.iloc[0:0], meta=empty_meta)
+        empty_meta = _get_meta_df(ddf_like)
+        # We always return an object with the same "shape" (columns/dtypes),
+        # but with zero rows.
+        return ddf_like.map_partitions(
+            lambda pdf: pdf.iloc[0:0],
+            meta=empty_meta,
+        )
 
     asc = (not order_desc)
 
@@ -948,11 +1137,31 @@ def _reduce_coverage_exact_dask(
         # If len(g) < k_per_cov, head(k_per_cov) simply returns the whole group.
         return g_sorted.head(int(k_per_cov))
 
-    meta = ddf._meta
-    return ddf.groupby("__icov__", group_keys=False).apply(
-        _take_topk,
-        meta=meta,
-    )
+    # Build a meta DataFrame once and reuse it for the groupby/apply
+    meta = _get_meta_df(ddf_like)
+
+    # ------------------------------------------------------------------
+    # HATS / LSDB path: operate on the underlying Dask DataFrame (. _ddf)
+    # ------------------------------------------------------------------
+    if isinstance(ddf_like, LsdbCatalog) and hasattr(ddf_like, "_ddf"):
+        base_ddf = ddf_like._ddf  # type: ignore[attr-defined]
+        return base_ddf.groupby("__icov__", group_keys=False).apply(
+            _take_topk,
+            meta=meta,
+        )
+
+    # ------------------------------------------------------------------
+    # Generic Dask DataFrame path (parquet / CSV / TSV etc.)
+    # ------------------------------------------------------------------
+    if hasattr(ddf_like, "groupby"):
+        return ddf_like.groupby("__icov__", group_keys=False).apply(
+            _take_topk,
+            meta=meta,
+        )
+
+    # Fallback: if we do not recognize the type, simply return as-is.
+    # This keeps non-HATS behaviour unchanged in unexpected cases.
+    return ddf_like
 
 
 def apply_fractional_k_per_cov(
@@ -1203,13 +1412,18 @@ def run_pipeline(cfg: Config) -> None:
         always=True,
     )
 
-    # Build DDF and stabilize partitions
+    # Build input collection (Dask DataFrame or LSDB Catalog)
     ddf, RA_NAME, DEC_NAME, keep_cols = _build_input_ddf(paths, cfg)
-    ddf = ddf.repartition(partition_size="256MB")
+
+    is_hats = isinstance(ddf, LsdbCatalog)
+
+    # For HATS catalogs we keep the native spatial partitioning and DO NOT repartition.
+    if not is_hats:
+        ddf = ddf.repartition(partition_size="256MB")
 
     # In high-throughput mode we keep the repartitioned dataframe in memory.
     # In low-memory mode we let Dask stream from disk/out-of-core as needed.
-    if persist_ddfs:
+    if persist_ddfs and hasattr(ddf, "persist"):
         ddf = ddf.persist()
         wait(ddf)
 
@@ -1218,18 +1432,58 @@ def run_pipeline(cfg: Config) -> None:
     NSIDE_C = 1 << Oc
 
     def _add_icov(pdf: pd.DataFrame, ra_col: str, dec_col: str) -> pd.DataFrame:
+        """
+        Add coverage cell index (__icov__) at coverage_order.
+
+        For HATS / LSDB catalogs (format: hats) with a HEALPix nested index
+        named like "_healpix_<order>", we derive __icov__ directly from the
+        index by bit-shifting.
+
+        For all other inputs we fall back to computing HEALPix indices from
+        RA/DEC, preserving the original behaviour.
+        """
         if len(pdf) == 0:
             pdf["__icov__"] = pd.Series([], dtype="int64")
             return pdf
-        theta = np.deg2rad(90.0 - pd.to_numeric(pdf[dec_col], errors="coerce").to_numpy())
-        phi = np.deg2rad((pd.to_numeric(pdf[ra_col], errors="coerce").to_numpy()) % 360.0)
+
+        # Fast path only for HATS catalogs
+        if is_hats:
+            idx_name = getattr(pdf.index, "name", None)
+            m = _HEALPIX_INDEX_RE.match(str(idx_name)) if idx_name else None
+
+            if m is not None:
+                # pdf.index stores the HEALPix nested pixel index at order base_order
+                base_order = int(m.group(1))
+                if Oc <= base_order:
+                    # Coarsen from base_order to coverage_order by dropping 2 bits per level
+                    ipix_base = pdf.index.to_numpy()
+                    shift = 2 * (base_order - Oc)
+                    icov = (ipix_base >> shift).astype(np.int64)
+                    pdf["__icov__"] = icov
+                    return pdf
+                # If coverage_order > base_order, fall through to the RA/DEC fallback
+
+        # Generic path: compute coverage index from RA/DEC with healpy
+        theta = np.deg2rad(
+            90.0 - pd.to_numeric(pdf[dec_col], errors="coerce").to_numpy()
+        )
+        phi = np.deg2rad(
+            (pd.to_numeric(pdf[ra_col], errors="coerce").to_numpy()) % 360.0
+        )
         icov = hp.ang2pix(NSIDE_C, theta, phi, nest=True).astype(np.int64)
         pdf["__icov__"] = icov
         return pdf
 
-    meta_with_icov = ddf._meta.copy()
+    base_meta = _get_meta_df(ddf)
+    meta_with_icov = base_meta.copy()
     meta_with_icov["__icov__"] = pd.Series([], dtype="int64")
-    ddf = ddf.map_partitions(_add_icov, RA_NAME, DEC_NAME, meta=meta_with_icov)
+
+    ddf = ddf.map_partitions(
+        _add_icov,
+        RA_NAME,
+        DEC_NAME,
+        meta=meta_with_icov,
+    )
 
     # Column report sample
     #nhh_dir = out_dir / "nhhtree"
@@ -1268,7 +1522,8 @@ def run_pipeline(cfg: Config) -> None:
     write_moc(out_dir, cfg.algorithm.level_coverage, dens_lc)
 
     # metadata.xml / Metadata.xml
-    cols = [(c, str(ddf[c].dtype), None) for c in keep_cols]
+    dtypes_map = ddf.dtypes.to_dict()
+    cols = [(c, str(dtypes_map.get(c, "object")), None) for c in keep_cols]
     ra_idx = keep_cols.index(RA_NAME)
     dec_idx = keep_cols.index(DEC_NAME)
     write_metadata_xml(out_dir, cols, ra_idx, dec_idx)
@@ -1441,8 +1696,7 @@ def run_pipeline(cfg: Config) -> None:
         sel_ddf = remainder_ddf[needed_cols]
 
         # Partition-level candidate pass: keep (k + tie_buffer) per __icov__
-        meta_cols = {c: sel_ddf._meta[c] for c in sel_ddf.columns}
-        meta_cand = pd.DataFrame(meta_cols)
+        meta_cand = _get_meta_df(sel_ddf)
 
         cand_ddf = sel_ddf.map_partitions(
             _candidates_by_coverage_partition,
@@ -1458,17 +1712,45 @@ def run_pipeline(cfg: Config) -> None:
 
         # Shuffle so that rows with the same __icov__ are co-located and
         # groupby operations are efficient and deterministic.
+        #
+        # For standard inputs (parquet / CSV / TSV) we keep the existing
+        # explicit shuffle("__icov__").
+        #
+        # For HATS / LSDB catalogs we *skip* this explicit shuffle and rely
+        # on the native spatial partitioning provided by LSDB. The global
+        # groupby("__icov__") in _reduce_coverage_exact_dask still enforces
+        # the same selection logic, but we avoid disturbing HATS' own layout.
         target_parts = cfg.cluster.n_workers * cfg.cluster.threads_per_worker * 2
-        cand_ddf = cand_ddf.shuffle(
-            "__icov__",
-            npartitions=max(target_parts, sel_ddf.npartitions)
-        )
+
+        if (not is_hats) and hasattr(cand_ddf, "shuffle"):
+            # Non-HATS path: keep the original shuffle-by-coverage behaviour.
+            cand_ddf = cand_ddf.shuffle(
+                "__icov__",
+                npartitions=max(target_parts, sel_ddf.npartitions),
+            )
+        elif (not is_hats) and hasattr(cand_ddf, "_ddf") and hasattr(cand_ddf._ddf, "shuffle"):
+            # Non-HATS LSDB-like objects that expose a ._ddf with shuffle support.
+            base_ddf = cand_ddf._ddf  # type: ignore[attr-defined]
+            cand_ddf = base_ddf.shuffle(
+                "__icov__",
+                npartitions=max(target_parts, sel_ddf.npartitions),
+            )
+        else:
+            # HATS / LSDB path (is_hats == True) or objects with no explicit shuffle:
+            # we keep the existing partitioning and let Dask + LSDB handle data
+            # movement internally during the groupby("__icov__") step.
+            _log(
+                f"[DEPTH {depth}] HATS / LSDB path or no shuffle available "
+                f"→ keeping native partitioning for __icov__",
+                always=True,
+            )
 
         # ------------------------------------------------------------------
-        # Two modes controlled only by avoid_computes_wherever_possible:
-        #   1) "Avoid computes wherever possible" mode (avoid_computes=True, standard):
+        # Two modes controlled by avoid_computes_wherever_possible:
+        #   1) "Avoid computes wherever possible" (avoid_computes=True):
         #        - selected_ddf = _reduce_coverage_exact_dask(cand_ddf, ...)
         #        - selected_pdf = selected_ddf.compute()
+        #      This works for both plain Dask DataFrames and LSDB Catalogs.
         #   2) Use intermediate computes (avoid_computes=False):
         #        - cand_pdf = cand_ddf.compute()
         #        - selected_pdf = _reduce_coverage_exact(cand_pdf, ...)
@@ -1486,8 +1768,6 @@ def run_pipeline(cfg: Config) -> None:
             )
 
             selected_pdf = selected_ddf.compute()
-            # In this mode we skip logging the candidate count to avoid
-            # an extra .compute() on cand_ddf.shape[0].
             _log_depth_stats(
                 _log,
                 depth,
@@ -1536,8 +1816,13 @@ def run_pipeline(cfg: Config) -> None:
 
         # Map selected rows to ipix for this order
         if len(selected_pdf) > 0:
-            theta = np.deg2rad(90.0 - selected_pdf[DEC_NAME].to_numpy())
-            phi = np.deg2rad((selected_pdf[RA_NAME] % 360.0).to_numpy())
+            # Ensure we are working with plain NumPy float arrays
+            ra_vals = pd.to_numeric(selected_pdf[RA_NAME], errors="coerce").to_numpy()
+            dec_vals = pd.to_numeric(selected_pdf[DEC_NAME], errors="coerce").to_numpy()
+
+            theta = np.deg2rad(90.0 - dec_vals)            # colatitude
+            phi = np.deg2rad(ra_vals % 360.0)              # longitude in [0, 360)
+
             NSIDE_L = 1 << depth
             ipixL = hp.ang2pix(NSIDE_L, theta, phi, nest=True).astype(np.int64)
             selected_pdf["__ipix__"] = ipixL
@@ -1556,7 +1841,6 @@ def run_pipeline(cfg: Config) -> None:
             counts=counts,
             selected=selected_pdf,
             order_desc=cfg.algorithm.order_desc,
-            stage_dir=Path(os.environ.get("SLURM_TMPDIR", "/tmp")),
             allsky_collect=allsky_needed,
         )
         _log_depth_stats(_log, depth, "written", counts=densmaps[depth], written=written_per_ipix)
@@ -1605,6 +1889,8 @@ def run_pipeline(cfg: Config) -> None:
             _log(f"[INFO] Depth {depth}: nothing selected; stopping selection loop.", always=True)
             break
 
+        remainder_meta = _get_meta_df(remainder_ddf)
+
         remainder_ddf = remainder_ddf.map_partitions(
             filter_remainder_by_coverage_partition,
             score_expr=cfg.columns.score,
@@ -1612,7 +1898,7 @@ def run_pipeline(cfg: Config) -> None:
             thr_cov=thr_cov,
             ra_col=RA_NAME,
             dec_col=DEC_NAME,
-            meta=remainder_ddf._meta,
+            meta=remainder_meta,
         )
 
         # Persist the filtered remainder only when we explicitly want
