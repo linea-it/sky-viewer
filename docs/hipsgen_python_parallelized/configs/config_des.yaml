@@ -152,10 +152,10 @@ cluster:
 # -----------------------------------------------------------------------------
 output:
   # Output root directory for the HiPS hierarchy.
-  out_dir: "/scratch/users/luigi.silva/hipsgencat/DES_DR2_small_sample"
+  out_dir: "/scratch/users/luigi.silva/sky-viewer/docs/hipsgen_python_parallelized/DES_DR2_spatial_cut"
 
   # Catalog / HiPS name (used in metadata and folder names).
-  cat_name: "DES_DR2_small_sample"
+  cat_name: "DES_DR2_spatial_cut"
 
   # Default sky position for visualization (RA DEC, degrees).
   target: "0 0"

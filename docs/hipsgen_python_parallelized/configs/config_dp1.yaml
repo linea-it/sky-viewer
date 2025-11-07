@@ -25,7 +25,7 @@ input:
   # Input file(s) or directories (supports wildcards).
   # Parquet/CSV/TSV → file paths; HATS → root catalog folder.
   paths:
-    - "/scratch/users/luigi.silva/curso-hpc/des_dr2_cut_spatial/*.parquet"
+    - "/scratch/users/luigi.silva/data_preparation_results/lsst_dp1/DP_run_LSST_DP1_mag_cModelFlux_sfd_2025-10-29_15-57/data/*.parquet"
 
   # Format: "parquet", "csv", "tsv", or "hats"
   format: parquet
@@ -44,20 +44,36 @@ input:
 # -----------------------------------------------------------------------------
 columns:
   # RA/DEC column names or 1-based indices (if no header).
-  ra: RA
-  dec: DEC
+  ra: coord_ra
+  dec: coord_dec
 
   # Score expression to rank sources within each coverage cell/tile.
   # Example: "MAG_I" or "(FLUX_R / ERR_R)**2"
   # order_desc=false → lower is better; true → higher is better.
-  score: "MAG_AUTO_I_DERED"
+  score: "i_cModelMag_dered"
 
   # Optional explicit list of columns to keep in output tiles.
   # If omitted, keeps RA/DEC, score-related, and all input columns.
   keep:
-    - MAG_AUTO_G_DERED
-    # - MAG_AUTO_R_DERED
-    # - ...
+    - objectId
+    - detect_fromBlend
+    - detect_isDeblendedModelSource
+    - detect_isIsolated
+    - refExtendedness
+    - tract
+    - patch
+    - u_cModelMag_dered
+    - u_cModelMagErr_dered
+    - g_cModelMag_dered
+    - g_cModelMagErr_dered
+    - r_cModelMag_dered
+    - r_cModelMagErr_dered
+    - i_cModelMag_dered
+    - i_cModelMagErr_dered
+    - z_cModelMag_dered
+    - z_cModelMagErr_dered
+    - y_cModelMag_dered
+    - y_cModelMagErr_dered
 
 
 # -----------------------------------------------------------------------------
@@ -152,10 +168,10 @@ cluster:
 # -----------------------------------------------------------------------------
 output:
   # Output root directory for the HiPS hierarchy.
-  out_dir: "/scratch/users/luigi.silva/hipsgencat/DES_DR2_small_sample"
+  out_dir: "/scratch/users/luigi.silva/sky-viewer/docs/hipsgen_python_parallelized/LSST_DP1"
 
   # Catalog / HiPS name (used in metadata and folder names).
-  cat_name: "DES_DR2_small_sample"
+  cat_name: "LSST_DP1"
 
   # Default sky position for visualization (RA DEC, degrees).
   target: "0 0"
