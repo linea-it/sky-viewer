@@ -1,4 +1,3 @@
----
 # HiPS Catalog Pipeline (Dask + Parquet / HATS)
 
 This pipeline generates HiPS-compliant catalog hierarchies from large input tables using Dask.  
