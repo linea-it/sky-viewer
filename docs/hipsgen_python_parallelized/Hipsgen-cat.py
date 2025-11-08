@@ -105,20 +105,27 @@ class AlgoOpts:
     """
     Algorithm options controlling the coverage-based HiPS catalog selection.
 
-    The logic is:
-      * Sources are grouped by a HEALPix "coverage" order (coverage_order → __icov__).
+    The logic in the default mode is:
+      * Sources are grouped by a HEALPix "coverage" order (coverage_order → __icov__),
+        or by HATS partitions when use_hats_as_coverage=True.
       * At each HiPS level (depth), a target number of rows per coverage cell
         is computed from a density profile (density_mode, k_per_cov_initial),
         optionally overridden by per-level settings (k_per_cov_per_level) and
         by global per-level caps (targets_total_per_level).
       * Within each coverage cell, rows are ranked by the score expression and
         truncated according to the desired density.
+
+    Additionally, instead of specifying a per-coverage initial density
+    (k_per_cov_initial), the user may opt to specify an initial *total*
+    target per level (targets_total_initial). The two parameters are
+    conceptually equivalent and mutually exclusive at the configuration
+    level: only one of them should be provided in the YAML.
     """
     # HiPS / coverage geometry
     level_limit: int              # maximum HiPS order (NorderL)
     level_coverage: int           # MOC / coverage order (lC)
     order_desc: bool              # False -> ascending score (lower is better)
-    coverage_order: int           # HEALPix order for __icov__ coverage cells
+    coverage_order: int           # HEALPix order for __icov__ coverage cells (default mode)
 
     # Optional per-level overrides for k (hard overrides by depth).
     # Example: {3: 0.6, 4: 1.2}
@@ -132,16 +139,23 @@ class AlgoOpts:
     # -------------------------
     # Density profile controls
     # -------------------------
-    # How k varies with depth:
-    #   "constant" → same k_per_cov_initial at all depths
+    # How k (or total targets) varies with depth:
+    #   "constant" → same base value at all depths
     #   "linear"   → increases linearly with depth
     #   "exp"      → increases exponentially with depth
     #   "log"      → increases ~log(depth)
     density_mode: str = "constant"
 
     # Expected rows per coverage cell (__icov__) at depth=1
-    # (base of the density profile).
+    # (base of the density profile in per-coverage mode).
     k_per_cov_initial: float = 1.0
+
+    # Expected *total* number of rows at depth=1 (base of the density
+    # profile in total-target mode). When this is not None, the per-depth
+    # density is derived as:
+    #   T_desired(depth) → k_desired(depth) = T_desired / N_cov
+    # and k_per_cov_initial is ignored by the density profile.
+    targets_total_initial: Optional[float] = None
 
     # Base used only when density_mode == "exp".
     density_exp_base: float = 2.0
@@ -150,6 +164,10 @@ class AlgoOpts:
     # "random" -> per-coverage random +1 (uniformity-oriented)
     # "score"  -> global best-score selection (may break uniformity)
     fractional_mode: str = "random"
+
+    # When True (and input.format == "hats"), use the HATS/LSDB partitions
+    # themselves as coverage cells (__icov__), instead of HEALPix cells.
+    use_hats_as_coverage: bool = False
 
 
 @dataclass
@@ -1588,63 +1606,123 @@ def run_pipeline(cfg: Config) -> None:
             ddf = ddf.persist()
             wait(ddf)
     
-        # Add coverage cell index (__icov__) at coverage_order
-        Oc = int(cfg.algorithm.coverage_order)
-        NSIDE_C = 1 << Oc
-    
-        def _add_icov(pdf: pd.DataFrame, ra_col: str, dec_col: str) -> pd.DataFrame:
-            """
-            Add coverage cell index (__icov__) at coverage_order.
-    
-            For HATS / LSDB catalogs (format: hats) with a HEALPix nested index
-            named like "_healpix_<order>", we derive __icov__ directly from the
-            index by bit-shifting.
-    
-            For all other inputs we fall back to computing HEALPix indices from
-            RA/DEC, preserving the original behaviour.
-            """
-            if len(pdf) == 0:
-                pdf["__icov__"] = pd.Series([], dtype="int64")
-                return pdf
-    
-            # Fast path only for HATS catalogs
-            if is_hats:
-                idx_name = getattr(pdf.index, "name", None)
-                m = _HEALPIX_INDEX_RE.match(str(idx_name)) if idx_name else None
-    
-                if m is not None:
-                    # pdf.index stores the HEALPix nested pixel index at order base_order
-                    base_order = int(m.group(1))
-                    if Oc <= base_order:
-                        # Coarsen from base_order to coverage_order by dropping 2 bits per level
-                        ipix_base = pdf.index.to_numpy()
-                        shift = 2 * (base_order - Oc)
-                        icov = (ipix_base >> shift).astype(np.int64)
-                        pdf["__icov__"] = icov
-                        return pdf
-                    # If coverage_order > base_order, fall through to the RA/DEC fallback
-    
-            # Generic path: compute coverage index from RA/DEC with healpy
-            theta = np.deg2rad(
-                90.0 - pd.to_numeric(pdf[dec_col], errors="coerce").to_numpy()
-            )
-            phi = np.deg2rad(
-                (pd.to_numeric(pdf[ra_col], errors="coerce").to_numpy()) % 360.0
-            )
-            icov = hp.ang2pix(NSIDE_C, theta, phi, nest=True).astype(np.int64)
-            pdf["__icov__"] = icov
-            return pdf
-    
+        # ------------------------------------------------------------------
+        # Coverage: either fixed HEALPix coverage (default) or HATS partitions
+        # ------------------------------------------------------------------
+        use_hats_cov = is_hats and bool(getattr(cfg.algorithm, "use_hats_as_coverage", False))
+
         base_meta = _get_meta_df(ddf)
         meta_with_icov = base_meta.copy()
         meta_with_icov["__icov__"] = pd.Series([], dtype="int64")
-    
-        ddf = ddf.map_partitions(
-            _add_icov,
-            RA_NAME,
-            DEC_NAME,
-            meta=meta_with_icov,
-        )
+
+        if use_hats_cov:
+            # ==============================================================
+            # HATS-specific coverage: one coverage cell per HATS partition
+            # --------------------------------------------------------------
+            # Each LSDB/HATS partition becomes a coverage cell (__icov__).
+            # This follows the adaptive HATS pixelization (different orders,
+            # non-overlapping pixels), but keeps the rest of the pipeline
+            # logic unchanged (densmaps, MOC, hierarchical selection).
+            # ==============================================================
+
+            try:
+                hp_pixels = ddf.get_healpix_pixels()
+                n_hp_pixels = len(hp_pixels)
+            except Exception:
+                hp_pixels = None
+                n_hp_pixels = None
+
+            n_parts = ddf.npartitions
+
+            msg = (
+                f"[coverage] Using HATS partitions as coverage cells (__icov__), "
+                f"n_partitions={n_parts}"
+            )
+            if n_hp_pixels is not None:
+                msg += f", get_healpix_pixels() returned {n_hp_pixels} pixels"
+            _log(msg, always=True)
+
+            # Build a small Dask Series with one integer per partition: 0, 1, ..., n_parts-1
+            part_ids = dd.from_pandas(
+                pd.Series(range(n_parts), dtype="int64"),
+                npartitions=n_parts,
+            )
+
+            def _assign_icov(pdf: pd.DataFrame, part_series: pd.Series) -> pd.DataFrame:
+                """Assign the partition id as __icov__ for all rows in the partition."""
+                if pdf.empty:
+                    pdf["__icov__"] = pd.Series([], dtype="int64")
+                    return pdf
+                cov_id = int(part_series.iloc[0])
+                pdf = pdf.copy()
+                pdf["__icov__"] = cov_id
+                return pdf
+
+            ddf = ddf.map_partitions(
+                _assign_icov,
+                part_ids,
+                meta=meta_with_icov,
+            )
+
+        else:
+            # ==============================================================
+            # Default coverage: HEALPix cells at coverage_order (Oc)
+            # ==============================================================
+
+            Oc = int(cfg.algorithm.coverage_order)
+            NSIDE_C = 1 << Oc
+
+            def _add_icov(pdf: pd.DataFrame, ra_col: str, dec_col: str) -> pd.DataFrame:
+                """
+                Add coverage cell index (__icov__) at coverage_order.
+
+                For HATS / LSDB catalogs (format: hats) with a HEALPix nested index
+                named like "_healpix_<order>", we derive __icov__ directly from the
+                index by bit-shifting.
+
+                For all other inputs we fall back to computing HEALPix indices from
+                RA/DEC, preserving the original behaviour.
+                """
+                if len(pdf) == 0:
+                    pdf["__icov__"] = pd.Series([], dtype="int64")
+                    return pdf
+
+                # Fast path only for HATS catalogs
+                if is_hats:
+                    idx_name = getattr(pdf.index, "name", None)
+                    m = _HEALPIX_INDEX_RE.match(str(idx_name)) if idx_name else None
+
+                    if m is not None:
+                        # pdf.index stores the HEALPix nested pixel index at order base_order
+                        base_order = int(m.group(1))
+                        if Oc <= base_order:
+                            # Coarsen from base_order to coverage_order by dropping 2 bits per level
+                            ipix_base = pdf.index.to_numpy()
+                            shift = 2 * (base_order - Oc)
+                            icov = (ipix_base >> shift).astype(np.int64)
+                            pdf = pdf.copy()
+                            pdf["__icov__"] = icov
+                            return pdf
+                        # If coverage_order > base_order, fall through to the RA/DEC fallback
+
+                # Generic path: compute coverage index from RA/DEC with healpy
+                theta = np.deg2rad(
+                    90.0 - pd.to_numeric(pdf[dec_col], errors="coerce").to_numpy()
+                )
+                phi = np.deg2rad(
+                    (pd.to_numeric(pdf[ra_col], errors="coerce").to_numpy()) % 360.0
+                )
+                icov = hp.ang2pix(NSIDE_C, theta, phi, nest=True).astype(np.int64)
+                pdf = pdf.copy()
+                pdf["__icov__"] = icov
+                return pdf
+
+            ddf = ddf.map_partitions(
+                _add_icov,
+                RA_NAME,
+                DEC_NAME,
+                meta=meta_with_icov,
+            )
     
         # Column report sample
         #nhh_dir = out_dir / "nhhtree"
@@ -1721,6 +1799,7 @@ def run_pipeline(cfg: Config) -> None:
             tie_buffer: {cfg.algorithm.tie_buffer}
             density_mode: {cfg.algorithm.density_mode}
             k_per_cov_initial: {cfg.algorithm.k_per_cov_initial}
+            targets_total_initial: {cfg.algorithm.targets_total_initial}
             density_exp_base: {cfg.algorithm.density_exp_base}
             """
         ).strip("\n")
@@ -1770,47 +1849,96 @@ def run_pipeline(cfg: Config) -> None:
     
                 # Choose k for this level: density profile + per-level overrides
                 # -----------------------------------------------------------------
-                # 1) Base k_desired from the density profile (can be fractional)
+                # 1) Base k_desired from the density profile (can be fractional).
+                #    Two mutually exclusive modes are supported:
+                #      * per-coverage profile  (k_per_cov_initial)
+                #      * total-target profile  (targets_total_initial)
                 # -----------------------------------------------------------------
                 algo = cfg.algorithm
                 mode = (getattr(algo, "density_mode", "constant") or "constant").lower()
-        
+                use_total_profile = getattr(algo, "targets_total_initial", None) is not None
+
                 # Depth index for the profile (start at 1)
                 delta = max(0, depth - 1)
-        
-                k0 = float(algo.k_per_cov_initial)
-        
-                if mode == "constant":
-                    k_desired = k0
-                elif mode == "linear":
-                    # Grows linearly with depth (1×, 2×, 3×, ...)
-                    k_desired = k0 * float(1 + delta)
-                elif mode == "exp":
-                    # Grows exponentially with depth
-                    base = float(getattr(algo, "density_exp_base", 2.0))
-                    if base <= 1.0:
-                        base = 2.0
-                    k_desired = k0 * (base ** float(delta))
-                elif mode == "log":
-                    # Grows roughly like log2(depth + const)
-                    k_desired = k0 * math.log2(delta + 2.0)
+
+                # Number of coverage cells (non-empty __icov__) at this depth,
+                # used both for the total-target profile and for per-level caps.
+                n_cov = None
+                if use_total_profile or depth in Tmap:
+                    try:
+                        n_cov = int(remainder_ddf["__icov__"].dropna().nunique().compute())
+                    except Exception:
+                        n_cov = 0
+
+                if use_total_profile:
+                    # --- Total-target profile: evolve a total desired count per level ---
+                    T0 = float(algo.targets_total_initial)
+
+                    if mode == "constant":
+                        T_desired = T0
+                    elif mode == "linear":
+                        # Grows linearly with depth (1×, 2×, 3×, ...)
+                        T_desired = T0 * float(1 + delta)
+                    elif mode == "exp":
+                        # Grows exponentially with depth
+                        base = float(getattr(algo, "density_exp_base", 2.0))
+                        if base <= 1.0:
+                            base = 2.0
+                        T_desired = T0 * (base ** float(delta))
+                    elif mode == "log":
+                        # Grows roughly like log2(depth + const)
+                        T_desired = T0 * math.log2(delta + 2.0)
+                    else:
+                        raise ValueError(f"Unknown density_mode: {algo.density_mode!r}")
+
+                    if n_cov is None or n_cov <= 0:
+                        # No coverage cells → nothing to select on this level
+                        k_desired = 0.0
+                    else:
+                        # Convert total-target profile into per-coverage expectation
+                        k_desired = T_desired / float(n_cov)
+
+                    _log(
+                        f"[DEPTH {depth}] start (density_mode={mode}, "
+                        f"targets_total_initial={T0:.4f}, "
+                        f"n_cov={n_cov}, k_desired_from_total={k_desired:.4f})",
+                        always=True,
+                    )
                 else:
-                    raise ValueError(f"Unknown density_mode: {algo.density_mode!r}")
-        
+                    # --- Per-coverage profile: evolve k_per_cov_initial directly ---
+                    k0 = float(algo.k_per_cov_initial)
+
+                    if mode == "constant":
+                        k_desired = k0
+                    elif mode == "linear":
+                        # Grows linearly with depth (1×, 2×, 3×, ...)
+                        k_desired = k0 * float(1 + delta)
+                    elif mode == "exp":
+                        # Grows exponentially with depth
+                        base = float(getattr(algo, "density_exp_base", 2.0))
+                        if base <= 1.0:
+                            base = 2.0
+                        k_desired = k0 * (base ** float(delta))
+                    elif mode == "log":
+                        # Grows roughly like log2(depth + const)
+                        k_desired = k0 * math.log2(delta + 2.0)
+                    else:
+                        raise ValueError(f"Unknown density_mode: {algo.density_mode!r}")
+
+                    _log(
+                        f"[DEPTH {depth}] start (density_mode={mode}, k_desired={k_desired:.4f})",
+                        always=True,
+                    )
+
                 # 2) Per-level override (if provided) always wins over the profile
                 if algo.k_per_cov_per_level and depth in algo.k_per_cov_per_level:
                     k_desired = float(algo.k_per_cov_per_level[depth])
-        
+
                 # Ensure non-negative
                 k_desired = max(0.0, float(k_desired))
-        
-                # Log initial desired k for this level (before global caps)
-                _log(
-                    f"[DEPTH {depth}] start (density_mode={mode}, k_desired={k_desired:.4f})",
-                    always=True,
-                )
+
                 _log_depth_stats(_log, depth, "start", counts=densmaps[depth])
-        
+
                 # Optionally apply a global total cap T_L for this level:
                 #   - If T_L is set, we compute cap_per_cov = T_L / N_cov_nonempty,
                 #     where N_cov_nonempty is the number of coverage cells (__icov__)
@@ -1818,11 +1946,12 @@ def run_pipeline(cfg: Config) -> None:
                 #   - The effective k_desired is then min(k_desired, cap_per_cov).
                 if depth in Tmap:
                     T_L = float(Tmap[depth])
-                    try:
-                        n_cov = int(remainder_ddf["__icov__"].dropna().nunique().compute())
-                    except Exception:
-                        n_cov = 0
-        
+                    if n_cov is None:
+                        try:
+                            n_cov = int(remainder_ddf["__icov__"].dropna().nunique().compute())
+                        except Exception:
+                            n_cov = 0
+
                     if n_cov > 0 and T_L > 0.0:
                         cap_per_cov = T_L / float(n_cov)
                         if cap_per_cov < k_desired:
@@ -1839,7 +1968,7 @@ def run_pipeline(cfg: Config) -> None:
                             f"T_L={T_L}, N_cov={n_cov}",
                             always=True,
                         )
-        
+
                 # If after capping k_desired <= 0, there is nothing to select at this level.
                 if k_desired <= 0.0:
                     _log(f"[DEPTH {depth}] k_desired <= 0 → skipping this depth", always=True)
@@ -2146,7 +2275,36 @@ def load_config(path: str) -> Config:
 
     # --- density / selection parameters ---
     density_mode = algo.get("density_mode", "constant")
-    k_per_cov_initial = float(algo["k_per_cov_initial"]) if "k_per_cov_initial" in algo else 1.0
+
+    # Mutually exclusive initial parameters:
+    #   * k_per_cov_initial       → base expected rows per coverage cell (depth=1)
+    #   * targets_total_initial   → base expected *total* rows per level (depth=1)
+    #
+    # Only one of them should be defined in the YAML. If both are provided,
+    # raise an error to avoid ambiguous behaviour.
+    raw_k_per_cov_initial = algo.get("k_per_cov_initial", None)
+    raw_targets_total_initial = algo.get("targets_total_initial", None)
+
+    if raw_k_per_cov_initial is not None and raw_targets_total_initial is not None:
+        raise ValueError(
+            "algorithm.k_per_cov_initial and algorithm.targets_total_initial "
+            "are mutually exclusive. Please define only one of them in the YAML."
+        )
+
+    if raw_k_per_cov_initial is not None:
+        k_per_cov_initial = float(raw_k_per_cov_initial)
+        targets_total_initial = None
+    elif raw_targets_total_initial is not None:
+        targets_total_initial = float(raw_targets_total_initial)
+        # k_per_cov_initial is not used by the density profile when
+        # targets_total_initial is set, but we keep a harmless default
+        # for completeness / backward-compatibility.
+        k_per_cov_initial = 1.0
+    else:
+        # Default behaviour (backward-compatible): per-coverage profile
+        # with k_per_cov_initial = 1.0 and no total-target profile.
+        k_per_cov_initial = 1.0
+        targets_total_initial = None
 
     cfg = Config(
         input=InputCfg(
@@ -2185,9 +2343,13 @@ def load_config(path: str) -> Config:
 
             density_mode=density_mode,
             k_per_cov_initial=k_per_cov_initial,
+            targets_total_initial=targets_total_initial,
             density_exp_base=float(algo.get("density_exp_base", 2.0)),
 
             fractional_mode=algo.get("fractional_mode", "random"),
+
+            # Use HATS/LSDB partitions as coverage cells when True
+            use_hats_as_coverage=bool(algo.get("use_hats_as_coverage", False)),
         ),
         cluster=ClusterCfg(
             mode=y["cluster"].get("mode", "local"),

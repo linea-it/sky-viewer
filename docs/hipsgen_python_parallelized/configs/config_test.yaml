@@ -92,6 +92,13 @@ algorithm:
   # objects per level may become too small.
   coverage_order: 10
 
+  # If true, it uses the HATS catalog's own partitioning as "coverage". In 
+  # this case, the coverage_order parameter is ignored. Therefore, the 
+  # selection of objects per pixel will have a bias associated with object
+  # density, since there will be more pixels in denser regions. It only works 
+  # if format: hats above.
+  use_hats_as_coverage: true
+
   # Score ordering: false → ascending (lower better); true → descending.
   order_desc: false
 
@@ -101,7 +108,13 @@ algorithm:
 
   # Base expected number of rows per coverage cell at depth 1.
   # Tip: tune together with coverage_order to balance per-level population.
-  k_per_cov_initial: 0.05
+  # It is mutually exclusive with targets_total_initial - use one or the other.
+  # k_per_cov_initial: 0.05
+
+  # Base number of total expected rows at depth 1. This number is internally 
+  # converted to a k per coverage cell. It is mutually exclusive with 
+  # k_per_cov_initial - use one or the other.
+  targets_total_initial: 100
 
   # Growth factor for "exp" density mode (e.g., 2 → doubles per level).
   density_exp_base: 2
