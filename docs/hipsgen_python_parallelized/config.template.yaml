@@ -65,64 +65,60 @@ columns:
 # Algorithmic controls
 # -----------------------------------------------------------------------------
 algorithm:
-  # Maximum HiPS order (1..level_limit); tiles written for all levels ≤ this.
+  # Maximum HiPS order (tiles written for all levels ≤ this).
   level_limit: 11
 
-  # HEALPix order for MOC and coverage density map.
+  # HEALPix order used for MOC and density maps.
   level_coverage: 10
 
-  # HEALPix order for coverage cells (__icov__); higher = finer uniformity.
-  # ⚠️ Note: if you *decrease* coverage_order (larger cells), consider
-  # increasing k_per_cov_initial — otherwise, the number of selected
-  # objects per level may become too small.
+  # HEALPix order for coverage cells (__icov__).
+  # Ignored if use_hats_as_coverage=true.
   coverage_order: 10
 
-  # If true, it uses the HATS catalog's own partitioning as "coverage". In 
-  # this case, the coverage_order parameter is ignored. Therefore, the 
-  # selection of objects per pixel will have a bias associated with object
-  # density, since there will be more pixels in denser regions. It only works 
-  # if format: hats above.
-  #use_hats_as_coverage: true
+  # Use HATS catalog partitioning as coverage (format: hats only).
+  # When true, coverage_order is ignored.
+  use_hats_as_coverage: false
 
-  # Score ordering: false → ascending (lower better); true → descending.
+  # Score ordering: false → ascending; true → descending.
   order_desc: false
 
-  # Density variation with depth:
-  # "constant", "linear", "exp", or "log"
+  # Density variation with depth: constant, linear, exp, or log.
   density_mode: "exp"
 
-  # Base expected number of rows per coverage cell at depth 1.
-  # Tip: tune together with coverage_order to balance per-level population.
-  # It is mutually exclusive with targets_total_initial - use one or the other.
+  # Base expected number of rows per coverage cell at depth=1.
+  # Mutually exclusive with targets_total_initial.
   k_per_cov_initial: 0.05
 
-  # Base number of total expected rows at depth 1. This number is internally 
-  # converted to a k per coverage cell. It is mutually exclusive with 
-  # k_per_cov_initial - use one or the other.
-  #targets_total_initial: 100
+  # Base expected total number of rows at depth=1.
+  # Mutually exclusive with k_per_cov_initial.
+  # targets_total_initial: 150
 
-  # Growth factor for "exp" density mode (e.g., 2 → doubles per level).
+  # Growth factor for "exp" density mode.
   density_exp_base: 2
 
-  # Optional per-level overrides for expected rows per coverage cell.
-  # Keys = depth (Norder), values = float.
+  # Optional per-level overrides (depth: k_per_cov value).
   # k_per_cov_per_level:
   #   3: 0.5
   #   5: 2.0
   #   7: 5.0
 
-  # Optional global caps: total target rows per depth (Norder → count).
+  # Optional global caps: total target rows per depth (depth: total count).
   # targets_total_per_level:
   #   1: 1000
   #   2: 2000
   #   3: 4000
 
   # Fractional mode:
-  # "random" → probabilistic per-coverage;
-  # "score" → global best-score preference.
+  #   random → probabilistic (no score preference)
+  #   score  → prefers best scores
   fractional_mode: "score"
 
-  # Extra candidates per coverage cell near cutoff (helps avoid artifacts).
+  # Fractional logic scope:
+  #   local  → independent per coverage cell (__icov__)
+  #   global → applied to all coverage cells jointly
+  fractional_mode_logic: "local"
+
+  # Extra candidates per coverage cell near cutoff.
   tie_buffer: 2
 
 

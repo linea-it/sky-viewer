@@ -105,13 +105,16 @@ class AlgoOpts:
     """
     Algorithm options controlling the coverage-based HiPS catalog selection.
 
-    The logic in the default mode is:
-      * Sources are grouped by a HEALPix "coverage" order (coverage_order → __icov__),
-        or by HATS partitions when use_hats_as_coverage=True.
+    The default logic is:
+      * Sources are grouped by a coverage cell (__icov__), either
+        - a HEALPix cell at coverage_order, or
+        - a HATS partition when use_hats_as_coverage=True.
+
       * At each HiPS level (depth), a target number of rows per coverage cell
         is computed from a density profile (density_mode, k_per_cov_initial),
         optionally overridden by per-level settings (k_per_cov_per_level) and
         by global per-level caps (targets_total_per_level).
+
       * Within each coverage cell, rows are ranked by the score expression and
         truncated according to the desired density.
 
@@ -161,9 +164,17 @@ class AlgoOpts:
     density_exp_base: float = 2.0
 
     # How to handle the fractional part of k:
-    # "random" -> per-coverage random +1 (uniformity-oriented)
-    # "score"  -> global best-score selection (may break uniformity)
+    #   "random" -> random +1 decisions
+    #   "score"  -> score-based decisions
     fractional_mode: str = "random"
+
+    # Scope of the fractional logic:
+    #   "auto"   -> backward-compatible:
+    #                random -> local
+    #                score  -> global
+    #   "local"  -> operate independently per coverage cell (__icov__)
+    #   "global" -> operate on the union of all coverage cells at this depth
+    fractional_mode_logic: str = "auto"
 
     # When True (and input.format == "hats"), use the HATS/LSDB partitions
     # themselves as coverage cells (__icov__), instead of HEALPix cells.
@@ -1300,16 +1311,17 @@ def apply_fractional_k_per_cov(
     score_col: str,
     order_desc: bool,
     mode: str = "random",
+    mode_logic: str = "auto",
     ra_col: str | None = None,
     dec_col: str | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Apply fractional-k adjustment on top of an integer per-coverage selection.
 
-    Inputs
-    -------
+    Parameters
+    ----------
     selected : pd.DataFrame
-        DataFrame already limited to <= k_int rows per __icov__ 
+        DataFrame already limited to <= k_int rows per __icov__
         (output of _reduce_coverage_exact).
     k_desired : float
         Expected number of rows per coverage cell (can be fractional).
@@ -1317,11 +1329,19 @@ def apply_fractional_k_per_cov(
         Column name used for ranking.
     order_desc : bool
         If False → lower score is better; if True → higher score is better.
-    mode : str
-        * "random" → per-coverage behavior: probabilistic +1 per cell.
-        * "score"  → global behavior: keeps the globally best sources by score,
+    mode : {"random", "score"}
+        * "random" → selection is purely probabilistic (no score preference
+                     inside each coverage cell when mode_logic="local").
+        * "score"  → selection prefers the best scores.
+    mode_logic : {"auto", "local", "global"}
+        * "auto"   → backward-compatible:
+                       random -> local
+                       score  -> global
+        * "local"  → operate independently in each coverage cell (__icov__).
+        * "global" → operate on the union of all coverage cells at this depth.
     ra_col, dec_col : str, optional
-        RA and DEC column names (used for deterministic tie-breaking).
+        RA and DEC column names (used for deterministic tie-breaking when
+        mode == "score" and/or mode_logic == "global").
 
     Returns
     -------
@@ -1330,102 +1350,230 @@ def apply_fractional_k_per_cov(
         dropped_df : rows not written at this depth, but still available for
                      deeper levels.
     """
-    # Nothing to do if no data or k is non-positive
-    if selected is None or len(selected) == 0 or k_desired <= 0.0:
+    if selected is None:
+        raise ValueError("apply_fractional_k_per_cov expects a pandas.DataFrame, got None.")
+
+    if len(selected) == 0 or k_desired <= 0.0:
+        # Nothing to adjust
         return selected, selected.iloc[0:0]
 
     mode = (mode or "random").lower()
+    logic_raw = (mode_logic or "auto").lower()
+
+    if mode not in ("random", "score"):
+        raise ValueError(f"Unknown fractional_mode: {mode!r}")
+
+    # "auto" keeps backward-compatible behaviour:
+    #   * random → local
+    #   * score  → global
+    if logic_raw == "auto":
+        logic = "global" if mode == "score" else "local"
+    else:
+        if logic_raw not in ("local", "global"):
+            raise ValueError(f"Unknown fractional_mode_logic: {mode_logic!r}")
+        logic = logic_raw
+
+    if "__icov__" not in selected.columns:
+        # No coverage information: nothing we can do in a coverage-aware way.
+        return selected, selected.iloc[0:0]
 
     # ============================================================
-    # MODE "score" → GLOBAL SELECTION (rank by score, not per_cov)
+    # MODE "score" + GLOBAL LOGIC  → old behaviour
     # ============================================================
-    if mode == "score":
-        if "__icov__" not in selected.columns:
-            # Fallback to random if __icov__ is missing
-            mode = "random"
-        else:
-            n_cov = int(selected["__icov__"].nunique())
-            if n_cov == 0:
-                return selected.iloc[0:0], selected
+    if mode == "score" and logic == "global":
+        n_cov = int(selected["__icov__"].nunique())
+        if n_cov == 0:
+            return selected.iloc[0:0], selected
 
-            # Compute the total expected number of sources for this depth
-            # (fractional k times number of coverage cells)
-            k_total_desired = float(k_desired) * float(n_cov)
+        # Total expected number of rows for this depth
+        k_total_desired = float(k_desired) * float(n_cov)
 
-            # Round and cap to available number of rows
-            n_sel = len(selected)
-            n_keep = int(round(k_total_desired))
-            n_keep = max(0, min(n_keep, n_sel))
+        n_sel = len(selected)
+        n_keep = int(round(k_total_desired))
+        n_keep = max(0, min(n_keep, n_sel))
 
-            if n_keep == 0:
-                return selected.iloc[0:0], selected
+        if n_keep == 0:
+            return selected.iloc[0:0], selected
 
-            # Sort globally by score, using RA/DEC as deterministic tie-breakers
-            asc = (not order_desc)
+        asc = (not order_desc)
+        sort_cols = [score_col]
+        ascending = [asc]
+
+        if ra_col is not None and ra_col in selected.columns:
+            sort_cols.append(ra_col)
+            ascending.append(True)
+        if dec_col is not None and dec_col in selected.columns:
+            sort_cols.append(dec_col)
+            ascending.append(True)
+
+        selected_sorted = selected.sort_values(
+            sort_cols,
+            ascending=ascending,
+            kind="mergesort",
+        )
+
+        kept_df = selected_sorted.iloc[:n_keep]
+        dropped_df = selected_sorted.iloc[n_keep:]
+        return kept_df, dropped_df
+
+    # ============================================================
+    # MODE "score" + LOCAL LOGIC (score-based, per coverage cell)
+    # ============================================================
+    if mode == "score" and logic == "local":
+        asc = (not order_desc)
+        rng = np.random.default_rng()
+
+        kept_parts: list[pd.DataFrame] = []
+        dropped_parts: list[pd.DataFrame] = []
+
+        for icov, g in selected.groupby("__icov__"):
+            if g.empty:
+                continue
+
+            # Sort inside each coverage cell by score (and RA/DEC for ties)
             sort_cols = [score_col]
             ascending = [asc]
-
-            if ra_col is not None and ra_col in selected.columns:
+            if ra_col is not None and ra_col in g.columns:
                 sort_cols.append(ra_col)
                 ascending.append(True)
-            if dec_col is not None and dec_col in selected.columns:
+            if dec_col is not None and dec_col in g.columns:
                 sort_cols.append(dec_col)
                 ascending.append(True)
 
-            selected_sorted = selected.sort_values(
+            g_sorted = g.sort_values(
                 sort_cols,
                 ascending=ascending,
                 kind="mergesort",
             )
 
-            kept_df = selected_sorted.iloc[:n_keep]
-            dropped_df = selected_sorted.iloc[n_keep:]
-            return kept_df, dropped_df
+            n_avail = len(g_sorted)
+            k_local_desired = min(float(k_desired), float(n_avail))
+
+            k_floor = int(math.floor(k_local_desired))
+            k_floor = max(0, k_floor)
+
+            if k_floor > 0:
+                base_keep = g_sorted.iloc[:k_floor]
+            else:
+                base_keep = g_sorted.iloc[0:0]
+
+            remaining = g_sorted.iloc[k_floor:]
+
+            extra_keep = 0
+            frac_local = max(0.0, min(1.0, k_local_desired - float(k_floor)))
+            if len(remaining) > 0 and frac_local > 0.0:
+                if rng.random() < frac_local:
+                    extra_keep = 1
+
+            if extra_keep == 1:
+                # Keep the best among the remaining (highest-quality extra)
+                extra_row = remaining.iloc[:1]
+                final_keep = pd.concat([base_keep, extra_row], ignore_index=False)
+                final_drop = remaining.iloc[1:]
+            else:
+                final_keep = base_keep
+                final_drop = remaining
+
+            if len(final_keep) > 0:
+                kept_parts.append(final_keep)
+            if len(final_drop) > 0:
+                dropped_parts.append(final_drop)
+
+        kept_df = (
+            pd.concat(kept_parts, ignore_index=False)
+            if kept_parts
+            else selected.iloc[0:0]
+        )
+        dropped_df = (
+            pd.concat(dropped_parts, ignore_index=False)
+            if dropped_parts
+            else selected.iloc[0:0]
+        )
+        return kept_df, dropped_df
 
     # ============================================================
-    # MODE "random" → per-coverage uniform sampling
+    # MODE "random" + GLOBAL LOGIC (already fully random globally)
     # ============================================================
-    # In this mode each coverage cell behaves independently:
-    # we keep floor(k_desired) rows for sure, and one additional
-    # row with probability equal to the fractional part.
+    if mode == "random" and logic == "global":
+        n_cov = int(selected["__icov__"].nunique())
+        if n_cov == 0:
+            return selected.iloc[0:0], selected
+
+        # Convert per-coverage expectation into a global expected total
+        k_total_desired = float(k_desired) * float(n_cov)
+        n_sel = len(selected)
+        n_keep = int(round(k_total_desired))
+        n_keep = max(0, min(n_keep, n_sel))
+
+        if n_keep == 0:
+            return selected.iloc[0:0], selected
+
+        # Purely random global subset: no score preference
+        shuffled = selected.sample(frac=1.0, replace=False)
+        kept_df = shuffled.iloc[:n_keep]
+        dropped_df = shuffled.iloc[n_keep:]
+        return kept_df, dropped_df
+
+    # ============================================================
+    # MODE "random" + LOCAL LOGIC  → now truly random per coverage
+    # ============================================================
+    # At this point: mode == "random" and logic == "local"
     k_floor_global = math.floor(k_desired)
     frac = k_desired - k_floor_global
 
-    # If k is effectively integer → nothing to adjust
     if frac <= 1e-9:
+        # k_desired is effectively an integer → nothing to adjust
+        # We simply keep all rows in 'selected' (which already has <= k_int per __icov__).
         return selected, selected.iloc[0:0]
 
     rng = np.random.default_rng()
-    kept_parts = []
-    dropped_parts = []
+    kept_parts: list[pd.DataFrame] = []
+    dropped_parts: list[pd.DataFrame] = []
 
     for icov, g in selected.groupby("__icov__"):
         n_avail = len(g)
         if n_avail == 0:
             continue
 
+        # Local expectation for this coverage cell (clipped to availability)
         k_local_desired = min(k_desired, float(n_avail))
+
         k_floor = int(math.floor(k_local_desired))
         k_floor = max(0, k_floor)
 
+        # We now choose the baseline 'k_floor' rows UNIFORMLY AT RANDOM
+        # inside the coverage cell, with no score preference.
         if k_floor > 0:
-            base_keep = g.iloc[:k_floor]
+            # Random permutation of positions within this group
+            perm = rng.permutation(n_avail)
+            base_idx = perm[:k_floor]
+            remaining_idx = perm[k_floor:]
+
+            base_keep = g.iloc[base_idx]
+            remaining = g.iloc[remaining_idx]
         else:
             base_keep = g.iloc[0:0]
-
-        remaining = g.iloc[k_floor:]
+            remaining = g
 
         extra_keep = 0
         frac_local = max(0.0, min(1.0, k_local_desired - float(k_floor)))
+
         if len(remaining) > 0 and frac_local > 0.0:
-            u = rng.random()
-            if u < frac_local:
+            # With probability equal to the fractional part, keep ONE extra
+            # object chosen uniformly at random among 'remaining'.
+            if rng.random() < frac_local:
                 extra_keep = 1
 
         if extra_keep == 1:
-            extra_row = remaining.iloc[:1]  # best of the remaining
+            # Pick one random row from 'remaining'
+            j = rng.integers(len(remaining))
+            extra_row = remaining.iloc[[j]]  # keep as DataFrame
+
+            # Drop that row from 'remaining' to form the dropped set
+            remaining_without_extra = remaining.drop(remaining.index[j])
+
             final_keep = pd.concat([base_keep, extra_row], ignore_index=False)
-            final_drop = remaining.iloc[1:]
+            final_drop = remaining_without_extra
         else:
             final_keep = base_keep
             final_drop = remaining
@@ -1435,9 +1583,16 @@ def apply_fractional_k_per_cov(
         if len(final_drop) > 0:
             dropped_parts.append(final_drop)
 
-    kept_df = pd.concat(kept_parts, ignore_index=False) if kept_parts else selected.iloc[0:0]
-    dropped_df = pd.concat(dropped_parts, ignore_index=False) if dropped_parts else selected.iloc[0:0]
-
+    kept_df = (
+        pd.concat(kept_parts, ignore_index=False)
+        if kept_parts
+        else selected.iloc[0:0]
+    )
+    dropped_df = (
+        pd.concat(dropped_parts, ignore_index=False)
+        if dropped_parts
+        else selected.iloc[0:0]
+    )
     return kept_df, dropped_df
 
 
@@ -1801,6 +1956,8 @@ def run_pipeline(cfg: Config) -> None:
             k_per_cov_initial: {cfg.algorithm.k_per_cov_initial}
             targets_total_initial: {cfg.algorithm.targets_total_initial}
             density_exp_base: {cfg.algorithm.density_exp_base}
+            fractional_mode: {cfg.algorithm.fractional_mode}
+            fractional_mode_logic: {cfg.algorithm.fractional_mode_logic}
             """
         ).strip("\n")
         write_arguments(out_dir, arg_text + "\n")
@@ -2101,6 +2258,7 @@ def run_pipeline(cfg: Config) -> None:
                     score_col=cfg.columns.score,
                     order_desc=cfg.algorithm.order_desc,
                     mode=getattr(cfg.algorithm, "fractional_mode", "random"),
+                    mode_logic=getattr(cfg.algorithm, "fractional_mode_logic", "auto"),
                     ra_col=RA_NAME,
                     dec_col=DEC_NAME,
                 )
@@ -2347,6 +2505,7 @@ def load_config(path: str) -> Config:
             density_exp_base=float(algo.get("density_exp_base", 2.0)),
 
             fractional_mode=algo.get("fractional_mode", "random"),
+            fractional_mode_logic=algo.get("fractional_mode_logic", "auto"),
 
             # Use HATS/LSDB partitions as coverage cells when True
             use_hats_as_coverage=bool(algo.get("use_hats_as_coverage", False)),
