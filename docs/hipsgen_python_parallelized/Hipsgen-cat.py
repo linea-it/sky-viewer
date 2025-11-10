@@ -163,6 +163,14 @@ class AlgoOpts:
     # Base used only when density_mode == "exp".
     density_exp_base: float = 2.0
 
+    # Optional density bias based on coverage density (densmap at coverage_order).
+    # density_bias_mode:
+    #   "none"         → no bias (default, backward-compatible)
+    #   "proportional" → k_per_cov increases with density
+    #   "inverse"      → k_per_cov increases in sparse regions
+    density_bias_mode: str = "none"
+    density_bias_exponent: float = 1.0  # controls how strong the bias is
+
     # How to handle the fractional part of k:
     #   "random" -> random +1 decisions
     #   "score"  -> score-based decisions
@@ -1239,69 +1247,75 @@ def _reduce_coverage_exact_dask(
     ddf_like: Any,
     score_col: str,
     order_desc: bool,
-    k_per_cov: int,
+    k_per_cov: int | dict,
     ra_col: str,
     dec_col: str,
 ) -> Any:
     """
-    Dask-based equivalent of _reduce_coverage_exact for the scalar k_per_cov case.
+    Dask-based equivalent of _reduce_coverage_exact.
 
-    It keeps up to k_per_cov rows per coverage cell (__icov__), with the same
-    sorting and tie-breaking rules as the pandas implementation:
-      - sort by score_col, then RA, then DEC
-      - if there are fewer than k_per_cov rows in a cell, keep all of them.
+    Keeps up to k_per_cov rows per coverage cell (__icov__),
+    with the same ordering and tie-breaking rules as the pandas version:
 
-    This function accepts:
-      - a plain Dask DataFrame, or
-      - an LSDB Catalog, in which case the underlying ._ddf is used directly
-        to avoid interfering with LSDB's higher-level semantics.
+        - sort by score_col, then RA, then DEC
+        - if a cell has fewer rows than k_per_cov, keep them all
+
+    Parameters
+    ----------
+    ddf_like : Dask DataFrame or LSDB Catalog
+        The candidate dataframe (can be a Dask DataFrame or LSDB Catalog).
+    score_col : str
+        Column name used for ranking.
+    order_desc : bool
+        If False → lower score is better; if True → higher score is better.
+    k_per_cov : int or dict
+        If int  → same k for all coverage cells (__icov__).
+        If dict → per-coverage k values {icov: k}.
+    ra_col, dec_col : str
+        RA/DEC column names used for deterministic sorting.
     """
-    if k_per_cov <= 0:
+    asc = not order_desc
+    is_dict = isinstance(k_per_cov, dict)
+
+    # If k_per_cov is scalar and non-positive → return empty DataFrame
+    if (not is_dict) and int(k_per_cov) <= 0:
         empty_meta = _get_meta_df(ddf_like)
-        # We always return an object with the same "shape" (columns/dtypes),
-        # but with zero rows.
-        return ddf_like.map_partitions(
-            lambda pdf: pdf.iloc[0:0],
-            meta=empty_meta,
-        )
+        return ddf_like.map_partitions(lambda pdf: pdf.iloc[0:0], meta=empty_meta)
 
-    asc = (not order_desc)
+    def _take_topk(group: pd.DataFrame) -> pd.DataFrame:
+        """Select top-k rows within a single __icov__ group."""
+        if group.empty:
+            return group
 
-    def _take_topk(g: pd.DataFrame) -> pd.DataFrame:
-        if g.empty:
-            return g
-        g_sorted = g.sort_values(
+        if is_dict:
+            icov_val = int(group["__icov__"].iloc[0])
+            k = int(k_per_cov.get(icov_val, 0))
+        else:
+            k = int(k_per_cov)
+
+        if k <= 0:
+            return group.iloc[0:0]
+
+        group_sorted = group.sort_values(
             [score_col, ra_col, dec_col],
             ascending=[asc, True, True],
             kind="mergesort",
         )
-        # If len(g) < k_per_cov, head(k_per_cov) simply returns the whole group.
-        return g_sorted.head(int(k_per_cov))
+        return group_sorted.head(k)
 
-    # Build a meta DataFrame once and reuse it for the groupby/apply
+    # Prepare meta DataFrame for Dask
     meta = _get_meta_df(ddf_like)
 
-    # ------------------------------------------------------------------
-    # HATS / LSDB path: operate on the underlying Dask DataFrame (. _ddf)
-    # ------------------------------------------------------------------
+    # Handle LSDB Catalogs (operate on the internal Dask DataFrame)
     if isinstance(ddf_like, LsdbCatalog) and hasattr(ddf_like, "_ddf"):
         base_ddf = ddf_like._ddf  # type: ignore[attr-defined]
-        return base_ddf.groupby("__icov__", group_keys=False).apply(
-            _take_topk,
-            meta=meta,
-        )
+        return base_ddf.groupby("__icov__", group_keys=False).apply(_take_topk, meta=meta)
 
-    # ------------------------------------------------------------------
-    # Generic Dask DataFrame path (parquet / CSV / TSV etc.)
-    # ------------------------------------------------------------------
+    # Generic Dask DataFrame path
     if hasattr(ddf_like, "groupby"):
-        return ddf_like.groupby("__icov__", group_keys=False).apply(
-            _take_topk,
-            meta=meta,
-        )
+        return ddf_like.groupby("__icov__", group_keys=False).apply(_take_topk, meta=meta)
 
-    # Fallback: if we do not recognize the type, simply return as-is.
-    # This keeps non-HATS behaviour unchanged in unexpected cases.
+    # Fallback: unsupported type → return input unchanged
     return ddf_like
 
 
@@ -1314,6 +1328,7 @@ def apply_fractional_k_per_cov(
     mode_logic: str = "auto",
     ra_col: str | None = None,
     dec_col: str | None = None,
+    k_per_cov_desired_map: Optional[Dict[int, float]] = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Apply fractional-k adjustment on top of an integer per-coverage selection.
@@ -1324,7 +1339,9 @@ def apply_fractional_k_per_cov(
         DataFrame already limited to <= k_int rows per __icov__
         (output of _reduce_coverage_exact).
     k_desired : float
-        Expected number of rows per coverage cell (can be fractional).
+        Base expected number of rows per coverage cell (can be fractional).
+        When k_per_cov_desired_map is provided, this acts as a fallback for
+        coverage cells not present in the map.
     score_col : str
         Column name used for ranking.
     order_desc : bool
@@ -1342,6 +1359,11 @@ def apply_fractional_k_per_cov(
     ra_col, dec_col : str, optional
         RA and DEC column names (used for deterministic tie-breaking when
         mode == "score" and/or mode_logic == "global").
+    k_per_cov_desired_map : dict, optional
+        Optional per-coverage desired expectation:
+            k_desired_icov = k_per_cov_desired_map[icov]
+        When provided, all *local* modes will use k_desired_icov (clipped by
+        availability) instead of the scalar k_desired for that coverage cell.
 
     Returns
     -------
@@ -1377,8 +1399,16 @@ def apply_fractional_k_per_cov(
         # No coverage information: nothing we can do in a coverage-aware way.
         return selected, selected.iloc[0:0]
 
+    # Helper: desired k for a given coverage cell
+    def _k_desired_for_icov(icov: int, n_avail: int) -> float:
+        if k_per_cov_desired_map is not None:
+            v = k_per_cov_desired_map.get(int(icov), k_desired)
+        else:
+            v = k_desired
+        return min(float(v), float(n_avail))
+
     # ============================================================
-    # MODE "score" + GLOBAL LOGIC  → old behaviour
+    # MODE "score" + GLOBAL LOGIC  → unchanged behaviour
     # ============================================================
     if mode == "score" and logic == "global":
         n_cov = int(selected["__icov__"].nunique())
@@ -1417,7 +1447,8 @@ def apply_fractional_k_per_cov(
         return kept_df, dropped_df
 
     # ============================================================
-    # MODE "score" + LOCAL LOGIC (score-based, per coverage cell)
+    # MODE "score" + LOCAL LOGIC
+    #   → now allows per-coverage k_desired via k_per_cov_desired_map
     # ============================================================
     if mode == "score" and logic == "local":
         asc = (not order_desc)
@@ -1447,7 +1478,7 @@ def apply_fractional_k_per_cov(
             )
 
             n_avail = len(g_sorted)
-            k_local_desired = min(float(k_desired), float(n_avail))
+            k_local_desired = _k_desired_for_icov(icov, n_avail)
 
             k_floor = int(math.floor(k_local_desired))
             k_floor = max(0, k_floor)
@@ -1492,7 +1523,7 @@ def apply_fractional_k_per_cov(
         return kept_df, dropped_df
 
     # ============================================================
-    # MODE "random" + GLOBAL LOGIC (already fully random globally)
+    # MODE "random" + GLOBAL LOGIC  → unchanged behaviour
     # ============================================================
     if mode == "random" and logic == "global":
         n_cov = int(selected["__icov__"].nunique())
@@ -1515,15 +1546,15 @@ def apply_fractional_k_per_cov(
         return kept_df, dropped_df
 
     # ============================================================
-    # MODE "random" + LOCAL LOGIC  → now truly random per coverage
+    # MODE "random" + LOCAL LOGIC
+    #   → agora também suporta k_per_cov_desired_map
     # ============================================================
     # At this point: mode == "random" and logic == "local"
     k_floor_global = math.floor(k_desired)
-    frac = k_desired - k_floor_global
+    frac_global = k_desired - k_floor_global
 
-    if frac <= 1e-9:
-        # k_desired is effectively an integer → nothing to adjust
-        # We simply keep all rows in 'selected' (which already has <= k_int per __icov__).
+    if frac_global <= 1e-9 and k_per_cov_desired_map is None:
+        # Purely integer and no per-coverage overrides: nothing to adjust
         return selected, selected.iloc[0:0]
 
     rng = np.random.default_rng()
@@ -1536,13 +1567,11 @@ def apply_fractional_k_per_cov(
             continue
 
         # Local expectation for this coverage cell (clipped to availability)
-        k_local_desired = min(k_desired, float(n_avail))
+        k_local_desired = _k_desired_for_icov(icov, n_avail)
 
         k_floor = int(math.floor(k_local_desired))
         k_floor = max(0, k_floor)
 
-        # We now choose the baseline 'k_floor' rows UNIFORMLY AT RANDOM
-        # inside the coverage cell, with no score preference.
         if k_floor > 0:
             # Random permutation of positions within this group
             perm = rng.permutation(n_avail)
@@ -1565,11 +1594,8 @@ def apply_fractional_k_per_cov(
                 extra_keep = 1
 
         if extra_keep == 1:
-            # Pick one random row from 'remaining'
             j = rng.integers(len(remaining))
             extra_row = remaining.iloc[[j]]  # keep as DataFrame
-
-            # Drop that row from 'remaining' to form the dropped set
             remaining_without_extra = remaining.drop(remaining.index[j])
 
             final_keep = pd.concat([base_keep, extra_row], ignore_index=False)
@@ -1956,6 +1982,8 @@ def run_pipeline(cfg: Config) -> None:
             k_per_cov_initial: {cfg.algorithm.k_per_cov_initial}
             targets_total_initial: {cfg.algorithm.targets_total_initial}
             density_exp_base: {cfg.algorithm.density_exp_base}
+            density_bias_mode: {cfg.algorithm.density_bias_mode}
+            density_bias_exponent: {cfg.algorithm.density_bias_exponent}
             fractional_mode: {cfg.algorithm.fractional_mode}
             fractional_mode_logic: {cfg.algorithm.fractional_mode_logic}
             """
@@ -1998,12 +2026,26 @@ def run_pipeline(cfg: Config) -> None:
             return
     
         Tmap = cfg.algorithm.targets_total_per_level or {}
-    
+
+        # ------------------------------------------------------------------
+        # Pre-compute coverage density map (per __icov__) from densmaps
+        # ------------------------------------------------------------------
+        # We use the densmap at coverage_order as a proxy for the original
+        # density per coverage cell. This is static (based on the full input),
+        # and is used to bias k_per_cov when density_bias_mode != "none".
+        cov_order = int(cfg.algorithm.coverage_order)
+        dens_cov: Dict[int, int] = {}
+        if cov_order in densmaps:
+            vec = densmaps[cov_order]
+            dens_cov = {int(i): int(v) for i, v in enumerate(vec) if v > 0}
+        else:
+            dens_cov = {}
+
         for depth in range(1, cfg.algorithm.level_limit + 1):
             depth_t0 = time.time()
-    
+
             with _diag_ctx(f"dask_depth_{depth:02d}"):
-    
+
                 # Choose k for this level: density profile + per-level overrides
                 # -----------------------------------------------------------------
                 # 1) Base k_desired from the density profile (can be fractional).
@@ -2130,12 +2172,82 @@ def run_pipeline(cfg: Config) -> None:
                 if k_desired <= 0.0:
                     _log(f"[DEPTH {depth}] k_desired <= 0 → skipping this depth", always=True)
                     continue
-        
-                # We still need an integer ceiling for the candidate selection phase:
-                # we select up to k_int rows per coverage cell, then let the fractional
-                # part decide (probabilistically) whether to keep the "extra" row.
-                k_int = max(1, int(math.ceil(k_desired)))
-        
+
+                # ------------------------------------------------------------------
+                # Optional density bias: adjust k_per_cov per coverage cell
+                # based on the coverage density (densmaps at coverage_order).
+                #
+                # When density_bias_mode == "none" (default), we keep the original
+                # scalar k_per_cov = k_desired behaviour (backward-compatible).
+                #
+                # When density_bias_mode is "proportional" or "inverse", we build
+                # a dict k_per_cov[icov] and use it in both the candidate step
+                # and the exact reduction step, and we also pass the corresponding
+                # per-coverage expectations to the fractional step.
+                # ------------------------------------------------------------------
+                bias_mode = (getattr(algo, "density_bias_mode", "none") or "none").lower()
+                use_bias = bias_mode in ("proportional", "inverse") and bool(dens_cov)
+
+                k_per_cov_for_selection: Any
+                k_per_cov_desired_map: Optional[Dict[int, float]] = None
+
+                if use_bias:
+                    alpha = float(getattr(algo, "density_bias_exponent", 1.0))
+                    alpha = abs(alpha)  # ensure non-negative exponent
+                    eps = 1e-6
+
+                    # Build raw weights from coverage density
+                    w_raw: Dict[int, float] = {}
+                    for icov, cnt in dens_cov.items():
+                        val = float(cnt) + eps
+                        if bias_mode == "proportional":
+                            w = val ** alpha
+                        else:  # "inverse"
+                            w = val ** (-alpha)
+                        w_raw[int(icov)] = w
+
+                    if not w_raw:
+                        use_bias = False
+                        k_per_cov_for_selection = int(max(1, math.ceil(k_desired)))
+                    else:
+                        w_vals = list(w_raw.values())
+                        mean_w = float(np.mean(w_vals))
+                        if mean_w <= 0.0 or not np.isfinite(mean_w):
+                            use_bias = False
+                            k_per_cov_for_selection = int(max(1, math.ceil(k_desired)))
+                        else:
+                            # Normalize weights to mean 1, so the average k_desired
+                            # across coverage cells remains unchanged.
+                            k_per_cov_desired: Dict[int, float] = {}
+                            for icov, w in w_raw.items():
+                                w_norm = w / mean_w
+                                k_c = max(0.0, k_desired * w_norm)
+                                k_per_cov_desired[int(icov)] = k_c
+
+                            # Convert to integer ceil values per coverage cell
+                            k_per_cov_int: Dict[int, int] = {}
+                            for icov, k_c in k_per_cov_desired.items():
+                                if k_c <= 0.0:
+                                    continue
+                                k_per_cov_int[int(icov)] = max(1, int(math.ceil(k_c)))
+
+                            if not k_per_cov_int:
+                                use_bias = False
+                                k_per_cov_for_selection = int(max(1, math.ceil(k_desired)))
+                            else:
+                                k_per_cov_for_selection = k_per_cov_int
+                                k_per_cov_desired_map = k_per_cov_desired
+                                _log(
+                                    f"[DEPTH {depth}] density bias active: "
+                                    f"mode={bias_mode}, exponent={alpha}, "
+                                    f"base_k_desired={k_desired:.4f}",
+                                    always=True,
+                                )
+                else:
+                    # No bias: original scalar k_per_cov behaviour
+                    k_per_cov_for_selection = int(max(1, math.ceil(k_desired)))
+                    k_per_cov_desired_map = None
+
                 # Narrow DF to needed columns (from remainder)
                 needed_cols = list(remainder_ddf.columns)
                 if cfg.columns.score not in needed_cols:
@@ -2143,22 +2255,24 @@ def run_pipeline(cfg: Config) -> None:
                 if "__icov__" not in needed_cols:
                     needed_cols.append("__icov__")
                 sel_ddf = remainder_ddf[needed_cols]
-        
+
                 # Partition-level candidate pass: keep (k + tie_buffer) per __icov__
                 meta_cand = _get_meta_df(sel_ddf)
-        
+
                 cand_ddf = sel_ddf.map_partitions(
                     _candidates_by_coverage_partition,
                     score_col=cfg.columns.score,
                     order_desc=cfg.algorithm.order_desc,
-                    # Use integer ceiling for the candidate set per coverage cell.
-                    k_per_cov=k_int,
+                    # k_per_cov_for_selection can be either:
+                    #   * scalar int  → uniform k per coverage cell
+                    #   * dict        → per-coverage k[icov]
+                    k_per_cov=k_per_cov_for_selection,
                     tie_buffer=int(cfg.algorithm.tie_buffer),
                     ra_col=RA_NAME,
                     dec_col=DEC_NAME,
                     meta=meta_cand,
                 )
-        
+
                 # Shuffle so that rows with the same __icov__ are co-located and
                 # groupby operations are efficient and deterministic.
                 #
@@ -2170,7 +2284,7 @@ def run_pipeline(cfg: Config) -> None:
                 # groupby("__icov__") in _reduce_coverage_exact_dask still enforces
                 # the same selection logic, but we avoid disturbing HATS' own layout.
                 target_parts = cfg.cluster.n_workers * cfg.cluster.threads_per_worker * 2
-        
+
                 if (not is_hats) and hasattr(cand_ddf, "shuffle"):
                     # Non-HATS path: keep the original shuffle-by-coverage behaviour.
                     cand_ddf = cand_ddf.shuffle(
@@ -2193,29 +2307,29 @@ def run_pipeline(cfg: Config) -> None:
                         f"→ keeping native partitioning for __icov__",
                         always=True,
                     )
-        
+
                 # ------------------------------------------------------------------
                 # Two modes controlled by avoid_computes_wherever_possible:
-                #   1) "Avoid computes wherever possible" (avoid_computes=True):
-                #        - selected_ddf = _reduce_coverage_exact_dask(cand_ddf, ...)
-                #        - selected_pdf = selected_ddf.compute()
-                #      This works for both plain Dask DataFrames and LSDB Catalogs.
-                #   2) Use intermediate computes (avoid_computes=False):
-                #        - cand_pdf = cand_ddf.compute()
-                #        - selected_pdf = _reduce_coverage_exact(cand_pdf, ...)
+                #
+                #   * When avoid_computes == True:
+                #       - Always use _reduce_coverage_exact_dask (works with both
+                #         scalar and dict k_per_cov, including bias mode).
+                #
+                #   * When avoid_computes == False:
+                #       - Materialize candidates and use the pandas-based
+                #         _reduce_coverage_exact for maximum flexibility.
                 # ------------------------------------------------------------------
                 if avoid_computes:
-                    # Avoid materializing the full candidate set; we only materialize
-                    # the final per-depth selection, which should be much smaller.
+                    # Fully Dask-based reduction (supports both scalar and dict k_per_cov)
                     selected_ddf = _reduce_coverage_exact_dask(
                         cand_ddf,
                         score_col=cfg.columns.score,
                         order_desc=cfg.algorithm.order_desc,
-                        k_per_cov=k_int,
+                        k_per_cov=k_per_cov_for_selection,
                         ra_col=RA_NAME,
                         dec_col=DEC_NAME,
                     )
-        
+                
                     selected_pdf = selected_ddf.compute()
                     _log_depth_stats(
                         _log,
@@ -2224,16 +2338,15 @@ def run_pipeline(cfg: Config) -> None:
                         selected_len=len(selected_pdf),
                     )
                 else:
-                    # Original behaviour: materialize candidates first, then reduce.
+                    # Pandas fallback: materialize candidates and use standard reducer
                     cand_pdf = cand_ddf.compute()
                     _log_depth_stats(_log, depth, "candidates", candidates_len=len(cand_pdf))
-        
+                
                     selected_pdf = _reduce_coverage_exact(
                         cand_pdf,
                         score_col=cfg.columns.score,
                         order_desc=cfg.algorithm.order_desc,
-                        # Again, we use k_int here; fractional part is applied later.
-                        k_per_cov=k_int,
+                        k_per_cov=k_per_cov_for_selection,
                         ra_col=RA_NAME,
                         dec_col=DEC_NAME,
                     )
@@ -2243,15 +2356,15 @@ def run_pipeline(cfg: Config) -> None:
                         "selected_before_fractional",
                         selected_len=len(selected_pdf),
                     )
-        
+
                 # -----------------------------------------------------------------
-                # 2bis) Apply fractional k: implement expected k_desired per coverage
+                # Fractional k:
+                #   * Global modes behaviour is unchanged.
+                #   * Local modes can optionally use per-coverage k_desired via
+                #     k_per_cov_desired_map (e.g. when density bias is active),
+                #     so that the expected number of objects per pixel follows
+                #     both the integer and fractional parts of the biased k.
                 # -----------------------------------------------------------------
-                # This step randomly drops some of the selected rows so that the
-                # *expected* number of kept rows per coverage cell is k_desired.
-                # Dropped rows are not written at this level and remain available
-                # for deeper levels (because the remainder filter uses thresholds
-                # computed only from the finally kept set).
                 selected_pdf, _dropped_pdf = apply_fractional_k_per_cov(
                     selected_pdf,
                     k_desired=k_desired,
@@ -2261,27 +2374,28 @@ def run_pipeline(cfg: Config) -> None:
                     mode_logic=getattr(cfg.algorithm, "fractional_mode_logic", "auto"),
                     ra_col=RA_NAME,
                     dec_col=DEC_NAME,
+                    k_per_cov_desired_map=k_per_cov_desired_map,
                 )
                 _log_depth_stats(_log, depth, "selected", selected_len=len(selected_pdf))
-        
+
                 # Map selected rows to ipix for this order
                 if len(selected_pdf) > 0:
                     # Ensure we are working with plain NumPy float arrays
                     ra_vals = pd.to_numeric(selected_pdf[RA_NAME], errors="coerce").to_numpy()
                     dec_vals = pd.to_numeric(selected_pdf[DEC_NAME], errors="coerce").to_numpy()
-        
+
                     theta = np.deg2rad(90.0 - dec_vals)            # colatitude
                     phi = np.deg2rad(ra_vals % 360.0)              # longitude in [0, 360)
-        
+
                     NSIDE_L = 1 << depth
                     ipixL = hp.ang2pix(NSIDE_L, theta, phi, nest=True).astype(np.int64)
                     selected_pdf["__ipix__"] = ipixL
-        
+
                 # Write tiles + Allsky(1/2)
                 header_line = build_header_line_from_keep(keep_cols)
                 counts = densmaps[depth]
                 allsky_needed = (depth in (1, 2))
-        
+
                 written_per_ipix, allsky_df = finalize_write_tiles(
                     out_dir=out_dir,
                     depth=depth,
@@ -2294,30 +2408,30 @@ def run_pipeline(cfg: Config) -> None:
                     allsky_collect=allsky_needed,
                 )
                 _log_depth_stats(_log, depth, "written", counts=densmaps[depth], written=written_per_ipix)
-        
+
                 if allsky_needed and allsky_df is not None and len(allsky_df) > 0:
                     norder_dir = out_dir / f"Norder{depth}"
                     norder_dir.mkdir(parents=True, exist_ok=True)
                     tmp_allsky = norder_dir / ".Allsky.tsv.tmp"
                     final_allsky = norder_dir / "Allsky.tsv"
-        
+
                     nsrc_tot = int(counts.sum())
                     nwritten_tot = int(sum(written_per_ipix.values())) if written_per_ipix else 0
                     nremaining_tot = max(0, nsrc_tot - nwritten_tot)
                     completeness_header_allsky = f"# Completeness = {nremaining_tot} / {nsrc_tot}\n"
-        
+
                     header_cols = header_line.strip("\n").split("\t")
                     allsky_cols = [c for c in header_cols if c in allsky_df.columns]
                     df_as = allsky_df[allsky_cols].copy()
-        
+
                     with tmp_allsky.open("w", encoding="utf-8", newline="") as f:
                         f.write(completeness_header_allsky)
                         f.write(header_line)
-        
+
                     obj_cols = df_as.select_dtypes(include=["object", "string"]).columns
                     if len(obj_cols) > 0:
                         df_as[obj_cols] = df_as[obj_cols].replace({r"[\t\r\n]": " "}, regex=True)
-        
+
                     df_as.to_csv(
                         tmp_allsky,
                         sep="\t",
@@ -2328,7 +2442,7 @@ def run_pipeline(cfg: Config) -> None:
                         lineterminator="\n",
                     )
                     os.replace(tmp_allsky, final_allsky)
-        
+
                 # Build per-coverage thresholds and filter remainder
                 thr_cov = build_cov_thresholds(
                     selected_pdf,
@@ -2338,9 +2452,9 @@ def run_pipeline(cfg: Config) -> None:
                 if len(thr_cov) == 0:
                     _log(f"[INFO] Depth {depth}: nothing selected; stopping selection loop.", always=True)
                     break
-        
+
                 remainder_meta = _get_meta_df(remainder_ddf)
-        
+
                 remainder_ddf = remainder_ddf.map_partitions(
                     filter_remainder_by_coverage_partition,
                     score_expr=cfg.columns.score,
@@ -2350,15 +2464,14 @@ def run_pipeline(cfg: Config) -> None:
                     dec_col=DEC_NAME,
                     meta=remainder_meta,
                 )
-        
+
                 # Persist the filtered remainder only when we explicitly want
                 # high in-memory performance. In low-memory mode we avoid
                 # materializing this large dataframe in RAM.
                 if persist_ddfs:
                     remainder_ddf = remainder_ddf.persist()
                     wait(remainder_ddf)
-        
-        
+
                 # Optionally compute remainder size (can be expensive on huge datasets)
                 #rem_len = None
                 #if depth == 1 or depth == cfg.algorithm.level_limit:
@@ -2368,7 +2481,7 @@ def run_pipeline(cfg: Config) -> None:
                 #        rem_len = None
                 #
                 #_log_depth_stats(_log, depth, "filtered", remainder_len=rem_len)
-    
+
             _log(f"[DEPTH {depth}] done in {_fmt_dur(time.time() - depth_t0)}", always=True)
 
     try:
@@ -2503,6 +2616,10 @@ def load_config(path: str) -> Config:
             k_per_cov_initial=k_per_cov_initial,
             targets_total_initial=targets_total_initial,
             density_exp_base=float(algo.get("density_exp_base", 2.0)),
+
+            # New density-bias controls (optional, default = no bias)
+            density_bias_mode=algo.get("density_bias_mode", "none"),
+            density_bias_exponent=float(algo.get("density_bias_exponent", 1.0)),
 
             fractional_mode=algo.get("fractional_mode", "random"),
             fractional_mode_logic=algo.get("fractional_mode_logic", "auto"),

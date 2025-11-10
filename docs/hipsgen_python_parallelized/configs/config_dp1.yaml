@@ -100,6 +100,15 @@ algorithm:
   # Density variation with depth: constant, linear, exp, or log.
   density_mode: "exp"
 
+  # Density bias (optional; default = none)
+  # none         → uniform selection per coverage cell
+  # proportional → higher k in denser regions
+  # inverse      → higher k in sparser regions
+  density_bias_mode: "proportional"
+
+  # Power-law exponent controlling bias strength (e.g. 0.5=soft, 2.0=strong)
+  density_bias_exponent: 0.5
+
   # Base expected number of rows per coverage cell at depth=1.
   # Mutually exclusive with targets_total_initial.
   k_per_cov_initial: 0.05
