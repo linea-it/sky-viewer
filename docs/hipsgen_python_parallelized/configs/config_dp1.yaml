@@ -193,3 +193,9 @@ output:
 
   # Default sky position for visualization (RA DEC, degrees).
   target: "0 0"
+
+  # Unique IVOID identifier for this HiPS (required by HiPS 1.4).
+  creator_did: "ivo://PRIVATE_USER/LSST_DP1"
+
+  # Short human-readable title for the HiPS (required by HiPS 1.4).
+  obs_title: "LSST DP1 catalog"

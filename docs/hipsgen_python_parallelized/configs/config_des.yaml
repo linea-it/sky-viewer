@@ -177,3 +177,9 @@ output:
 
   # Default sky position for visualization (RA DEC, degrees).
   target: "0 0"
+
+  # Unique IVOID identifier for this HiPS (required by HiPS 1.4).
+  creator_did: "ivo://PRIVATE_USER/DES_DR2_spatial_cut"
+
+  # Short human-readable title for the HiPS (required by HiPS 1.4).
+  obs_title: "DES DR2 small sample with spatial cut"
