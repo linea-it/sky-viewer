@@ -248,6 +248,35 @@ def _write_text(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+def _detect_hats_catalog_root(paths: List[str]) -> Optional[Path]:
+    """
+    Best-effort detection of a HATS catalog layout.
+
+    Strategy: for each matched path, walk up its parent directories and
+    look for either 'collection.properties' or 'hats.properties'. The first
+    directory where one of these files is found is returned as the catalog
+    root. If nothing is found, return None.
+    """
+    marker_names = ("collection.properties", "hats.properties")
+
+    for p in paths:
+        cur = Path(p).resolve()
+
+        # If this is a file, scan its parents; if it's a directory, include it as well.
+        if cur.is_file():
+            candidates = list(cur.parents)
+        else:
+            candidates = [cur] + list(cur.parents)
+
+        for root in candidates:
+            for name in marker_names:
+                candidate = root / name
+                if candidate.exists():
+                    return root
+
+    return None
+
+
 def _now_str() -> str:
     """
     Return current UTC time in ISO 8601 format suitable for hips_release_date.
@@ -1708,6 +1737,37 @@ def run_pipeline(cfg: Config) -> None:
         cfg.algorithm.level_coverage = cfg.algorithm.level_limit
         _log("WARNING: level_coverage was > level_limit; set lC = lM", always=True)
 
+    # ------------------------------------------------------------------
+    # Configuration sanity / warning layer (HATS-related behaviour)
+    # ------------------------------------------------------------------
+    fmt_lower = str(cfg.input.format).lower()
+
+    # (2) Warn when use_hats_as_coverage is requested but format != 'hats'
+    if fmt_lower != "hats" and getattr(cfg.algorithm, "use_hats_as_coverage", False):
+        _log(
+            "[config] algorithm.use_hats_as_coverage=True was requested, but "
+            "input.format is not 'hats'. This option is only meaningful for "
+            "HATS/LSDB catalogs and will be ignored for this run.",
+            always=True,
+        )
+
+    # (3) Warn and *effectively ignore* density_bias_mode when using
+    #     format='hats' + use_hats_as_coverage=True (for now).
+    if (
+        fmt_lower == "hats"
+        and getattr(cfg.algorithm, "use_hats_as_coverage", False)
+        and str(getattr(cfg.algorithm, "density_bias_mode", "none")).lower() != "none"
+    ):
+        _log(
+            "[config] density_bias_mode is not supported when using format='hats' "
+            "with algorithm.use_hats_as_coverage=True. "
+            "The density bias will be ignored for this run (forcing density_bias_mode='none').",
+            always=True,
+        )
+        # Force density_bias_mode to 'none' so the selection logic will not
+        # try to use coverage-density-based biasing in this mode.
+        cfg.algorithm.density_bias_mode = "none"
+
     # Cluster
     if cfg.cluster.mode == "slurm":
         assert SLURMCluster is not None, "dask-jobqueue not available"
@@ -1794,6 +1854,19 @@ def run_pipeline(cfg: Config) -> None:
             + (" ..." if len(paths) > 3 else ""),
             always=True,
         )
+
+        # Warn if the input paths look like a HATS catalog but format != 'hats'
+        hats_root = _detect_hats_catalog_root(paths)
+        if hats_root is not None and cfg.input.format.lower() != "hats":
+            _log(
+                "[input] Detected a HATS catalog layout "
+                f"(found 'collection.properties' or 'hats.properties' under: {hats_root}). "
+                f"You requested input.format='{cfg.input.format}'. "
+                "The pipeline will proceed, but consider using input.format='hats' to "
+                "enable HATS/LSDB-specific features (e.g. LSDB partitions, "
+                "algorithm.use_hats_as_coverage).",
+                always=True,
+            )
 
         # Build input collection (Dask DataFrame or LSDB Catalog)
         ddf, RA_NAME, DEC_NAME, keep_cols = _build_input_ddf(paths, cfg)
