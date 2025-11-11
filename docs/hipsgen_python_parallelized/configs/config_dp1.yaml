@@ -80,47 +80,65 @@ columns:
 # Algorithmic controls
 # -----------------------------------------------------------------------------
 algorithm:
+
+  # ==============================
+  # Shared core settings (both modes)
+  # ==============================
+  # Selection strategy:
+  #   coverage   → coverage-based selection (k_per_cov, score, etc.)
+  #   mag_global → global magnitude-complete selection
+  selection_mode: "coverage"
+
   # Maximum HiPS order (tiles written for all levels ≤ this).
   level_limit: 11
 
-  # HEALPix order used for MOC and density maps.
+  # HEALPix order used for MOC and global density maps.
   level_coverage: 10
 
-  # HEALPix order for coverage cells (__icov__).
-  # Ignored if use_hats_as_coverage=true.
+  # HEALPix order used for densmaps and, in coverage mode, for coverage cells (__icov__).
   coverage_order: 10
 
-  # Use HATS catalog partitioning as coverage (format: hats only).
+
+  # ==============================
+  # Coverage-based mode ONLY
+  # (selection_mode: coverage)
+  # ==============================
+
+  # Use HATS catalog partitioning as coverage cells (format: hats only).
   # When true, coverage_order is ignored.
   use_hats_as_coverage: false
 
-  # Score ordering: false → ascending; true → descending.
+  # Score ordering for coverage-based ranking:
+  #   false → ascending (lower score is better)
+  #   true  → descending (higher score is better)
   order_desc: false
 
-  # Density variation with depth: constant, linear, exp, or log.
+  # Density variation with depth for k_per_cov or targets_total:
+  #   "constant", "linear", "exp", or "log".
   density_mode: "exp"
-
-  # Density bias (optional; default = none)
-  # none         → uniform selection per coverage cell
-  # proportional → higher k in denser regions
-  # inverse      → higher k in sparser regions
-  density_bias_mode: "proportional"
-
-  # Power-law exponent controlling bias strength (e.g. 0.5=soft, 2.0=strong)
-  density_bias_exponent: 0.5
 
   # Base expected number of rows per coverage cell at depth=1.
   # Mutually exclusive with targets_total_initial.
   k_per_cov_initial: 0.05
 
-  # Base expected total number of rows at depth=1.
+  # Base expected total number of rows at depth=1 (alternative to k_per_cov_initial).
   # Mutually exclusive with k_per_cov_initial.
   # targets_total_initial: 150
 
   # Growth factor for "exp" density mode.
   density_exp_base: 2
 
+  # Density bias:
+  #   "none"         → uniform selection per coverage cell
+  #   "proportional" → higher k in denser regions
+  #   "inverse"      → higher k in sparser regions
+  density_bias_mode: "proportional"
+
+  # Power-law exponent controlling bias strength (e.g. 0.5=soft, 2.0=strong).
+  density_bias_exponent: 0.5
+
   # Optional per-level overrides (depth: k_per_cov value).
+  # These override the density law at specific depths.
   # k_per_cov_per_level:
   #   3: 0.5
   #   5: 2.0
@@ -132,18 +150,44 @@ algorithm:
   #   2: 2000
   #   3: 4000
 
-  # Fractional mode:
-  #   random → probabilistic (no score preference)
-  #   score  → prefers best scores
+  # Fractional mode for k_per_cov:
+  #   "random" → probabilistic (no score preference)
+  #   "score"  → prefers best scores (global/local depending on fractional_mode_logic)
   fractional_mode: "score"
 
-  # Fractional logic scope:
-  #   local  → independent per coverage cell (__icov__)
-  #   global → applied to all coverage cells jointly
+  # Scope for fractional logic:
+  #   "local"  → applied per coverage cell (__icov__)
+  #   "global" → applied to all coverage cells jointly
   fractional_mode_logic: "local"
 
-  # Extra candidates per coverage cell near cutoff.
+  # Extra candidates per coverage cell near the cutoff (helps with score ties).
   tie_buffer: 2
+
+
+  # ==============================
+  # Global magnitude-complete mode ONLY
+  # (selection_mode: mag_global)
+  # ==============================
+
+  # Name of the magnitude column to use for global ordering and histogram.
+  # Required when selection_mode = "mag_global".
+  # mag_column: "mag_cModelFlux"
+
+  # Magnitude range that is complete across all depths.
+  # Required when selection_mode = "mag_global".
+  # mag_min: 17.0
+  # mag_max: 24.5
+
+  # Number of bins for the global magnitude histogram (controls quantile resolution).
+  # mag_hist_nbins: 2048
+
+  # Optional approximate global targets per depth (mag_global only).
+  # They must be provided in order:
+  #   n_1 only, or n_1 + n_2, or n_1 + n_2 + n_3.
+  # n_2 requires n_1; n_3 requires both n_1 and n_2.
+  # n_1: 1000
+  # n_2: 3000
+  # n_3: 7000
 
 
 # -----------------------------------------------------------------------------

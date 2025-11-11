@@ -123,7 +123,20 @@ class AlgoOpts:
     target per level (targets_total_initial). The two parameters are
     conceptually equivalent and mutually exclusive at the configuration
     level: only one of them should be provided in the YAML.
+
+    selection_mode controls which high-level selection strategy is used:
+      * "coverage"  → existing coverage-based logic (default, backward compatible)
+      * "mag_global" → new global magnitude-complete selection mode, where
+                       each depth receives a disjoint magnitude slice between
+                       mag_min and mag_max, with per-depth targets derived
+                       from the density maps.
     """
+
+    # Selection mode:
+    #   "coverage"  → original coverage-based selection
+    #   "mag_global" → new global magnitude-complete selection
+    selection_mode: str
+
     # HiPS / coverage geometry
     level_limit: int              # maximum HiPS order (NorderL)
     level_coverage: int           # MOC / coverage order (lC)
@@ -187,6 +200,31 @@ class AlgoOpts:
     # When True (and input.format == "hats"), use the HATS/LSDB partitions
     # themselves as coverage cells (__icov__), instead of HEALPix cells.
     use_hats_as_coverage: bool = False
+
+    # -------------------------
+    # mag_global selection controls
+    # -------------------------
+    # Name of the magnitude column used for global magnitude selection.
+    mag_column: Optional[str] = None
+
+    # Magnitude range [mag_min, mag_max] used for mag_global selection.
+    mag_min: Optional[float] = None
+    mag_max: Optional[float] = None
+
+    # Number of bins used for the global magnitude histogram in mag_global mode.
+    mag_hist_nbins: int = 256
+
+    # Optional approximate total targets for the first HiPS orders (depths 1–3)
+    # in mag_global mode. They are interpreted as *global* target counts per
+    # depth (before magnitude slicing). All are optional, but they must be
+    # provided in order:
+    #   - you may set only n_1
+    #   - or n_1 and n_2
+    #   - or n_1, n_2 and n_3
+    # It is invalid to set n_2 without n_1, or n_3 without both n_1 and n_2.
+    n_1: Optional[int] = None
+    n_2: Optional[int] = None
+    n_3: Optional[int] = None
 
 
 @dataclass
@@ -562,12 +600,18 @@ def _build_input_ddf(paths: List[str], cfg: Config) -> tuple[Any, str, str, List
         requested_keep = cfg.columns.keep or []
 
         # Extract potential score dependencies directly from the score expression.
-        # We assume the user only uses valid column names.
         score_expr = cfg.columns.score or ""
         score_tokens = set(_ID_RE.findall(str(score_expr)))
 
+        # Optionally request the magnitude column when using mag_global mode
+        mag_col_cfg = None
+        if getattr(cfg.algorithm, "selection_mode", "coverage").lower() == "mag_global":
+            mag_col_cfg = cfg.algorithm.mag_column
+
         # Always request RA, DEC and score dependencies
         must_keep = [cfg.columns.ra, cfg.columns.dec, *score_tokens]
+        if mag_col_cfg:
+            must_keep.append(mag_col_cfg)
 
         needed_cols: List[str] = []
         seen: set[str] = set()
@@ -659,7 +703,16 @@ def _build_input_ddf(paths: List[str], cfg: Config) -> tuple[Any, str, str, List
     available_cols = list(ddf0.columns)
     score_dependencies = _score_deps(cfg.columns.score, available_cols)
     requested_keep = (cfg.columns.keep or [])
+
+    # Optionally request the magnitude column when using mag_global mode
+    mag_col_cfg = None
+    if getattr(cfg.algorithm, "selection_mode", "coverage").lower() == "mag_global":
+        mag_col_cfg = cfg.algorithm.mag_column
+
     must_keep = [RA_NAME, DEC_NAME, *score_dependencies]
+    if mag_col_cfg and mag_col_cfg in available_cols:
+        must_keep.append(mag_col_cfg)
+
     candidate = requested_keep if requested_keep else available_cols
 
     seen = set()
@@ -888,6 +941,115 @@ def densmap_for_depth(ddf: dd.DataFrame, ra_col: str, dec_col: str, depth: int) 
     immediately, keeping the original behaviour.
     """
     return densmap_for_depth_delayed(ddf, ra_col, dec_col, depth).compute()
+
+
+# =============================================================================
+# Magnitude-based global selection helpers
+# =============================================================================
+
+def compute_mag_histogram_ddf(
+    ddf_like: Any,
+    mag_col: str,
+    mag_min: float,
+    mag_max: float,
+    nbins: int,
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """
+    Compute a 1D histogram of the magnitude column using Dask-friendly
+    operations (map_partitions + a single compute).
+
+    Parameters
+    ----------
+    ddf_like : Dask DataFrame or LSDB Catalog
+        Input collection containing the magnitude column.
+    mag_col : str
+        Name of the (numeric) magnitude column to use.
+    mag_min, mag_max : float
+        Magnitude range of interest.
+    nbins : int
+        Number of histogram bins (mag_min..mag_max).
+
+    Returns
+    -------
+    hist : numpy.ndarray of shape (nbins,)
+        Counts per magnitude bin.
+    bin_edges : numpy.ndarray of shape (nbins + 1,)
+        Magnitude bin edges.
+    n_total : int
+        Total number of rows with mag_min <= mag <= mag_max.
+    """
+    edges = np.linspace(mag_min, mag_max, nbins + 1, dtype="float64")
+
+    def _part_hist(pdf: pd.DataFrame) -> tuple[np.ndarray, int]:
+        if pdf is None or len(pdf) == 0:
+            return np.zeros(nbins, dtype="int64"), 0
+
+        vals = pd.to_numeric(pdf[mag_col], errors="coerce").to_numpy()
+        vals = vals[np.isfinite(vals)]
+        if vals.size == 0:
+            return np.zeros(nbins, dtype="int64"), 0
+
+        mask = (vals >= mag_min) & (vals <= mag_max)
+        vals = vals[mask]
+        if vals.size == 0:
+            return np.zeros(nbins, dtype="int64"), 0
+
+        h, _ = np.histogram(vals, bins=edges)
+        return h.astype("int64"), int(vals.size)
+
+    # Use only the magnitude column to keep partitions small
+    parts = ddf_like[[mag_col]].to_delayed()
+    delayed_results = [_delayed(_part_hist)(p) for p in parts]
+
+    def _sum_results(seq: List[tuple[np.ndarray, int]]) -> tuple[np.ndarray, int]:
+        h_total = np.zeros(nbins, dtype="int64")
+        n_total = 0
+        for h, n in seq:
+            h_total += h
+            n_total += int(n)
+        return h_total, n_total
+
+    total = _delayed(_sum_results)(delayed_results)
+    hist, n_total = dask_compute(total)[0]
+    return hist, edges, int(n_total)
+
+
+def _quantile_from_histogram(
+    cdf: np.ndarray,
+    bin_edges: np.ndarray,
+    q: float,
+) -> float:
+    """
+    Invert a 1D histogram CDF into a magnitude threshold.
+
+    Parameters
+    ----------
+    cdf : array-like
+        Monotonic cumulative distribution in [0, 1].
+    bin_edges : array-like
+        Histogram bin edges with len(bin_edges) = len(cdf) + 1.
+    q : float
+        Target quantile in [0, 1].
+
+    Returns
+    -------
+    mag_thresh : float
+        Magnitude value such that CDF(mag_thresh) ~= q.
+    """
+    if not len(cdf):
+        return float(bin_edges[0])
+
+    q = float(np.clip(q, 0.0, 1.0))
+
+    if q <= 0.0:
+        return float(bin_edges[0])
+    if q >= 1.0:
+        return float(bin_edges[-1])
+
+    idx = int(np.searchsorted(cdf, q, side="left"))
+    idx = max(0, min(idx, len(cdf) - 1))
+    # We simply return the left edge of the bin where CDF crosses q.
+    return float(bin_edges[idx])
 
 
 # =============================================================================
@@ -1902,123 +2064,196 @@ def run_pipeline(cfg: Config) -> None:
             ddf = ddf.persist()
             wait(ddf)
     
-        # ------------------------------------------------------------------
-        # Coverage: either fixed HEALPix coverage (default) or HATS partitions
-        # ------------------------------------------------------------------
-        use_hats_cov = is_hats and bool(getattr(cfg.algorithm, "use_hats_as_coverage", False))
+        algo = cfg.algorithm
+        selection_mode = (getattr(algo, "selection_mode", "coverage") or "coverage").lower()
 
-        base_meta = _get_meta_df(ddf)
-        meta_with_icov = base_meta.copy()
-        meta_with_icov["__icov__"] = pd.Series([], dtype="int64")
-
-        if use_hats_cov:
-            # ==============================================================
-            # HATS-specific coverage: one coverage cell per HATS partition
+        if selection_mode == "mag_global":
             # --------------------------------------------------------------
-            # Each LSDB/HATS partition becomes a coverage cell (__icov__).
-            # This follows the adaptive HATS pixelization (different orders,
-            # non-overlapping pixels), but keeps the rest of the pipeline
-            # logic unchanged (densmaps, MOC, hierarchical selection).
-            # ==============================================================
+            # Global magnitude-selection path:
+            #   * no coverage (__icov__) is needed for the selection itself
+            #   * we keep a numeric magnitude column in __mag__
+            #   * we restrict the working catalogue to [mag_min, mag_max]
+            # --------------------------------------------------------------
+            mag_col_cfg = getattr(algo, "mag_column", None)
+            if not mag_col_cfg:
+                raise ValueError(
+                    "algorithm.selection_mode='mag_global' requires "
+                    "algorithm.mag_column to be set to the name of a magnitude column."
+                )
 
-            try:
-                hp_pixels = ddf.get_healpix_pixels()
-                n_hp_pixels = len(hp_pixels)
-            except Exception:
-                hp_pixels = None
-                n_hp_pixels = None
+            if mag_col_cfg not in ddf.columns:
+                raise KeyError(
+                    f"Configured mag_column '{mag_col_cfg}' not found in input columns."
+                )
 
-            n_parts = ddf.npartitions
+            if algo.mag_min is None or algo.mag_max is None:
+                raise ValueError(
+                    "algorithm.selection_mode='mag_global' requires both "
+                    "algorithm.mag_min and algorithm.mag_max to be defined."
+                )
+            mag_min = float(algo.mag_min)
+            mag_max = float(algo.mag_max)
+            if mag_min >= mag_max:
+                raise ValueError(
+                    f"algorithm.mag_min ({mag_min}) must be strictly smaller than "
+                    f"algorithm.mag_max ({mag_max}) for mag_global selection."
+                )
 
-            msg = (
-                f"[coverage] Using HATS partitions as coverage cells (__icov__), "
-                f"n_partitions={n_parts}"
-            )
-            if n_hp_pixels is not None:
-                msg += f", get_healpix_pixels() returned {n_hp_pixels} pixels"
-            _log(msg, always=True)
+            # Numeric magnitude column kept in an internal __mag__ field so we
+            # never mutate the original data. Implemented via map_partitions so
+            # it works both for plain Dask DataFrames and LSDB Catalogs.
+            base_meta_mag = _get_meta_df(ddf)
+            meta_with_mag = base_meta_mag.copy()
+            meta_with_mag["__mag__"] = pd.Series([], dtype="float64")
 
-            # Build a small Dask Series with one integer per partition: 0, 1, ..., n_parts-1
-            part_ids = dd.from_pandas(
-                pd.Series(range(n_parts), dtype="int64"),
-                npartitions=n_parts,
-            )
-
-            def _assign_icov(pdf: pd.DataFrame, part_series: pd.Series) -> pd.DataFrame:
-                """Assign the partition id as __icov__ for all rows in the partition."""
+            def _add_mag_column(pdf: pd.DataFrame, mag_col_name: str) -> pd.DataFrame:
+                """Add a numeric __mag__ column derived from mag_col_name."""
                 if pdf.empty:
-                    pdf["__icov__"] = pd.Series([], dtype="int64")
+                    pdf["__mag__"] = pd.Series([], dtype="float64")
                     return pdf
-                cov_id = int(part_series.iloc[0])
                 pdf = pdf.copy()
-                pdf["__icov__"] = cov_id
+                pdf["__mag__"] = pd.to_numeric(pdf[mag_col_name], errors="coerce")
                 return pdf
 
             ddf = ddf.map_partitions(
-                _assign_icov,
-                part_ids,
-                meta=meta_with_icov,
+                _add_mag_column,
+                mag_col_cfg,
+                meta=meta_with_mag,
             )
 
+            # Restrict to [mag_min, mag_max] once; all depths use the same pool.
+            # Again, use map_partitions instead of boolean indexing so that
+            # LSDB Catalogs are handled correctly.
+            meta_sel = meta_with_mag.copy()
+
+            def _filter_mag_window(
+                pdf: pd.DataFrame,
+                mag_min_val: float,
+                mag_max_val: float,
+            ) -> pd.DataFrame:
+                """Keep only rows with __mag__ in [mag_min_val, mag_max_val]."""
+                if pdf.empty:
+                    return pdf
+                m = pd.to_numeric(pdf["__mag__"], errors="coerce")
+                mask = (m >= mag_min_val) & (m <= mag_max_val)
+                return pdf.loc[mask]
+
+            ddf_sel = ddf.map_partitions(
+                _filter_mag_window,
+                mag_min,
+                mag_max,
+                meta=meta_sel,
+            )
         else:
-            # ==============================================================
-            # Default coverage: HEALPix cells at coverage_order (Oc)
-            # ==============================================================
+            # ------------------------------------------------------------------
+            # Coverage: either fixed HEALPix coverage (default) or HATS partitions
+            # ------------------------------------------------------------------
+            use_hats_cov = is_hats and bool(getattr(cfg.algorithm, "use_hats_as_coverage", False))
 
-            Oc = int(cfg.algorithm.coverage_order)
-            NSIDE_C = 1 << Oc
+            base_meta = _get_meta_df(ddf)
+            meta_with_icov = base_meta.copy()
+            meta_with_icov["__icov__"] = pd.Series([], dtype="int64")
 
-            def _add_icov(pdf: pd.DataFrame, ra_col: str, dec_col: str) -> pd.DataFrame:
-                """
-                Add coverage cell index (__icov__) at coverage_order.
+            if use_hats_cov:
+                # ==============================================================
+                # HATS-specific coverage: one coverage cell per HATS partition
+                # --------------------------------------------------------------
+                try:
+                    hp_pixels = ddf.get_healpix_pixels()
+                    n_hp_pixels = len(hp_pixels)
+                except Exception:
+                    hp_pixels = None
+                    n_hp_pixels = None
 
-                For HATS / LSDB catalogs (format: hats) with a HEALPix nested index
-                named like "_healpix_<order>", we derive __icov__ directly from the
-                index by bit-shifting.
+                n_parts = ddf.npartitions
 
-                For all other inputs we fall back to computing HEALPix indices from
-                RA/DEC, preserving the original behaviour.
-                """
-                if len(pdf) == 0:
-                    pdf["__icov__"] = pd.Series([], dtype="int64")
+                msg = (
+                    f"[coverage] Using HATS partitions as coverage cells (__icov__), "
+                    f"n_partitions={n_parts}"
+                )
+                if n_hp_pixels is not None:
+                    msg += f", get_healpix_pixels() returned {n_hp_pixels} pixels"
+                _log(msg, always=True)
+
+                part_ids = dd.from_pandas(
+                    pd.Series(range(n_parts), dtype="int64"),
+                    npartitions=n_parts,
+                )
+
+                def _assign_icov(pdf: pd.DataFrame, part_series: pd.Series) -> pd.DataFrame:
+                    """Assign the partition id as __icov__ for all rows in the partition."""
+                    if pdf.empty:
+                        pdf["__icov__"] = pd.Series([], dtype="int64")
+                        return pdf
+                    cov_id = int(part_series.iloc[0])
+                    pdf = pdf.copy()
+                    pdf["__icov__"] = cov_id
                     return pdf
 
-                # Fast path only for HATS catalogs
-                if is_hats:
-                    idx_name = getattr(pdf.index, "name", None)
-                    m = _HEALPIX_INDEX_RE.match(str(idx_name)) if idx_name else None
-
-                    if m is not None:
-                        # pdf.index stores the HEALPix nested pixel index at order base_order
-                        base_order = int(m.group(1))
-                        if Oc <= base_order:
-                            # Coarsen from base_order to coverage_order by dropping 2 bits per level
-                            ipix_base = pdf.index.to_numpy()
-                            shift = 2 * (base_order - Oc)
-                            icov = (ipix_base >> shift).astype(np.int64)
-                            pdf = pdf.copy()
-                            pdf["__icov__"] = icov
-                            return pdf
-                        # If coverage_order > base_order, fall through to the RA/DEC fallback
-
-                # Generic path: compute coverage index from RA/DEC with healpy
-                theta = np.deg2rad(
-                    90.0 - pd.to_numeric(pdf[dec_col], errors="coerce").to_numpy()
+                ddf = ddf.map_partitions(
+                    _assign_icov,
+                    part_ids,
+                    meta=meta_with_icov,
                 )
-                phi = np.deg2rad(
-                    (pd.to_numeric(pdf[ra_col], errors="coerce").to_numpy()) % 360.0
-                )
-                icov = hp.ang2pix(NSIDE_C, theta, phi, nest=True).astype(np.int64)
-                pdf = pdf.copy()
-                pdf["__icov__"] = icov
-                return pdf
 
-            ddf = ddf.map_partitions(
-                _add_icov,
-                RA_NAME,
-                DEC_NAME,
-                meta=meta_with_icov,
-            )
+            else:
+                # ==============================================================
+                # Default coverage: HEALPix cells at coverage_order (Oc)
+                # ==============================================================
+
+                Oc = int(cfg.algorithm.coverage_order)
+                NSIDE_C = 1 << Oc
+
+                def _add_icov(pdf: pd.DataFrame, ra_col: str, dec_col: str) -> pd.DataFrame:
+                    """
+                    Add coverage cell index (__icov__) at coverage_order.
+
+                    For HATS / LSDB catalogs (format: hats) with a HEALPix nested index
+                    named like "_healpix_<order>", we derive __icov__ directly from the
+                    index by bit-shifting.
+
+                    For all other inputs we fall back to computing HEALPix indices from
+                    RA/DEC, preserving the original behaviour.
+                    """
+                    if len(pdf) == 0:
+                        pdf["__icov__"] = pd.Series([], dtype="int64")
+                        return pdf
+
+                    if is_hats:
+                        idx_name = getattr(pdf.index, "name", None)
+                        m = _HEALPIX_INDEX_RE.match(str(idx_name)) if idx_name else None
+
+                        if m is not None:
+                            base_order = int(m.group(1))
+                            if Oc <= base_order:
+                                ipix_base = pdf.index.to_numpy()
+                                shift = 2 * (base_order - Oc)
+                                icov = (ipix_base >> shift).astype(np.int64)
+                                pdf = pdf.copy()
+                                pdf["__icov__"] = icov
+                                return pdf
+
+                    theta = np.deg2rad(
+                        90.0 - pd.to_numeric(pdf[dec_col], errors="coerce").to_numpy()
+                    )
+                    phi = np.deg2rad(
+                        (pd.to_numeric(pdf[ra_col], errors="coerce").to_numpy()) % 360.0
+                    )
+                    icov = hp.ang2pix(NSIDE_C, theta, phi, nest=True).astype(np.int64)
+                    pdf = pdf.copy()
+                    pdf["__icov__"] = icov
+                    return pdf
+
+                ddf = ddf.map_partitions(
+                    _add_icov,
+                    RA_NAME,
+                    DEC_NAME,
+                    meta=meta_with_icov,
+                )
+
+            # For coverage-based selection, we work on the full catalogue with
+            # the coverage index attached.
+            ddf_sel = ddf
     
         # Column report sample
         #nhh_dir = out_dir / "nhhtree"
@@ -2038,7 +2273,7 @@ def run_pipeline(cfg: Config) -> None:
         
         # Build delayed densmaps for all depths
         delayed_maps = {
-            d: densmap_for_depth_delayed(ddf, RA_NAME, DEC_NAME, depth=d)
+            d: densmap_for_depth_delayed(ddf_sel, RA_NAME, DEC_NAME, depth=d)
             for d in depths
         }
         
@@ -2089,6 +2324,14 @@ def run_pipeline(cfg: Config) -> None:
             level_coverage(lC): {cfg.algorithm.level_coverage}
             coverage_order(Oc): {cfg.algorithm.coverage_order}
             order_desc: {cfg.algorithm.order_desc}
+            selection_mode: {cfg.algorithm.selection_mode}
+            mag_column: {cfg.algorithm.mag_column}
+            mag_min: {cfg.algorithm.mag_min}
+            mag_max: {cfg.algorithm.mag_max}
+            mag_hist_nbins: {cfg.algorithm.mag_hist_nbins}
+            n_1: {cfg.algorithm.n_1}
+            n_2: {cfg.algorithm.n_2}
+            n_3: {cfg.algorithm.n_3}
             k_per_cov_per_level: {cfg.algorithm.k_per_cov_per_level}
             targets_total_per_level: {cfg.algorithm.targets_total_per_level}
             tie_buffer: {cfg.algorithm.tie_buffer}
@@ -2104,499 +2347,632 @@ def run_pipeline(cfg: Config) -> None:
         ).strip("\n")
         write_arguments(out_dir, arg_text + "\n")
     
-    
+
         # =====================================================================
-        # Coverage-based selection: uniform expected k per coverage (__icov__), no duplicates
+        # Selection stage
         # =====================================================================
-        remainder_ddf = ddf
-    
-        # If the base expected density and all per-level overrides are non-positive,
-        # there is nothing to select.
-        if (
-            float(cfg.algorithm.k_per_cov_initial) <= 0.0
-            and not (cfg.algorithm.k_per_cov_per_level or {})
-        ):
+
+        remainder_ddf = ddf_sel
+        algo = cfg.algorithm
+        selection_mode = (getattr(algo, "selection_mode", "coverage") or "coverage").lower()
+
+        if selection_mode == "mag_global":
+            # --------------------------------------------------------------
+            # Global magnitude-complete selection:
+            #   1) Compute per-depth targets T_d ∝ #active tiles at that depth
+            #   2) Convert T_d into magnitude quantiles using a global histogram
+            #   3) For each depth, select all objects in the corresponding
+            #      magnitude slice and write tiles.
+            # --------------------------------------------------------------
+            mag_col_internal = "__mag__"
+            mag_min = float(algo.mag_min)
+            mag_max = float(algo.mag_max)
+
+            depths_sel = list(range(1, cfg.algorithm.level_limit + 1))
+
+            # 1) Histogram + CDF of magnitudes in [mag_min, mag_max]
+            with _diag_ctx("dask_mag_hist"):
+                hist, mag_edges_hist, N_tot_mag = compute_mag_histogram_ddf(
+                    remainder_ddf,
+                    mag_col=mag_col_internal,
+                    mag_min=mag_min,
+                    mag_max=mag_max,
+                    nbins=algo.mag_hist_nbins,
+                )
+
+            if N_tot_mag == 0:
+                _log(
+                    "[selection] mag_global: no objects found in the magnitude range "
+                    f"[{mag_min}, {mag_max}] → nothing to select.",
+                    always=True,
+                )
+                return
+
+            cdf_hist = hist.cumsum().astype("float64")
+            if cdf_hist[-1] > 0:
+                cdf_hist /= float(cdf_hist[-1])
+            else:
+                cdf_hist[:] = 0.0
+
+            # 2) Per-depth targets T_d from densmaps (weights ∝ #active tiles)
+            #    optionally honoring user-provided approximate totals n_1, n_2, n_3
+            #    for depths 1, 2 and 3.
+            weights = []
+            for d in depths_sel:
+                counts_d = densmaps[d]
+                tiles_active = int((counts_d > 0).sum())
+                # Avoid zero weights; at least one tile per depth for balancing
+                weights.append(max(1, tiles_active))
+
+            weights = np.asarray(weights, dtype="float64")
+
+            # Start with zero targets for all depths
+            T = np.zeros_like(weights, dtype="float64")
+
+            # Optional approximate fixed totals for depths 1, 2 and 3
+            fixed_targets: Dict[int, float] = {}
+            for d, n_val in (
+                (1, getattr(algo, "n_1", None)),
+                (2, getattr(algo, "n_2", None)),
+                (3, getattr(algo, "n_3", None)),
+            ):
+                if (d in depths_sel) and (n_val is not None):
+                    if int(n_val) < 0:
+                        raise ValueError(
+                            f"algorithm.n_{d} must be non-negative if provided "
+                            f"(got {n_val})."
+                        )
+                    fixed_targets[d] = float(int(n_val))
+
+            sum_fixed = float(sum(fixed_targets.values()))
+
+            # If the user asks for more objects in the first levels than we
+            # actually have in the magnitude range, rescale them uniformly.
+            if sum_fixed > float(N_tot_mag) and sum_fixed > 0.0:
+                scale = float(N_tot_mag) / sum_fixed
+                _log(
+                    "[mag_global] Sum of fixed targets n_1/n_2/n_3 "
+                    f"({int(sum_fixed)}) exceeds the total number of objects "
+                    f"in the magnitude range ({int(N_tot_mag)}). "
+                    f"Rescaling n_1/n_2/n_3 by a factor {scale:.3f}.",
+                    always=True,
+                )
+                for d in list(fixed_targets.keys()):
+                    fixed_targets[d] *= scale
+                sum_fixed = float(N_tot_mag)
+
+            # Assign fixed contributions to the corresponding depths
+            for d, val in fixed_targets.items():
+                idx = depths_sel.index(d)
+                T[idx] = val
+
+            # Remaining objects are distributed across the other depths
+            N_rem = max(0.0, float(N_tot_mag) - sum_fixed)
+            if N_rem > 0.0:
+                free_mask = np.ones_like(weights, dtype=bool)
+                for d in fixed_targets:
+                    idx = depths_sel.index(d)
+                    free_mask[idx] = False
+
+                W_free = float(weights[free_mask].sum())
+                if W_free <= 0.0:
+                    # Fallback: spread uniformly across all free depths
+                    n_free = int(free_mask.sum())
+                    if n_free > 0:
+                        T[free_mask] += N_rem / float(n_free)
+                else:
+                    T[free_mask] += weights[free_mask] / W_free * N_rem
+
+            # Convert per-depth totals into cumulative targets and quantiles
+            T_cum = np.cumsum(T)
+            if T_cum[-1] > 0.0:
+                Q = T_cum / float(N_tot_mag)
+            else:
+                Q = np.zeros_like(T_cum, dtype="float64")
+
+            # Convert cumulative targets into magnitude edges per depth
+            level_edges = np.empty(len(depths_sel) + 1, dtype="float64")
+            level_edges[0] = mag_min
+            for i, q in enumerate(Q, start=1):
+                level_edges[i] = _quantile_from_histogram(cdf_hist, mag_edges_hist, q)
+
+            # Ensure strictly non-decreasing edges and clamp to [mag_min, mag_max]
+            level_edges = np.maximum.accumulate(level_edges)
+            level_edges[0] = mag_min
+            level_edges[-1] = mag_max
+
             _log(
-                "[selection] k_per_cov_initial <= 0 and no per-level overrides → "
-                "nothing to select; finishing early.",
+                "[selection] mag_global mode: per-depth magnitude slices:\n"
+                + "\n".join(
+                    f"  depth {d}: [{level_edges[i]:.6f}, {level_edges[i+1]:.6f}"
+                    f"{')' if d != depths_sel[-1] else ']'}"
+                    for i, d in enumerate(depths_sel)
+                ),
                 always=True,
             )
-            # graceful shutdown
-            try:
-                client.close()
-            except Exception:
-                pass
-            try:
-                cluster.close()
-            except Exception:
-                pass
-            t1 = time.time()
-            _log(f"END HiPS catalog pipeline. Elapsed {_fmt_dur(t1 - t0)}", always=True)
-            try:
-                with (out_dir / "process.log").open("a", encoding="utf-8") as f:
-                    f.write("\n".join(log_lines) + "\n")
-            except Exception as e:
-                _log(f"{_ts()} | ERROR writing process.log: {type(e).__name__}: {e}")
-            return
-    
-        Tmap = cfg.algorithm.targets_total_per_level or {}
 
-        # ------------------------------------------------------------------
-        # Pre-compute coverage density map (per __icov__) from densmaps
-        # ------------------------------------------------------------------
-        # We use the densmap at coverage_order as a proxy for the original
-        # density per coverage cell. This is static (based on the full input),
-        # and is used to bias k_per_cov when density_bias_mode != "none".
-        cov_order = int(cfg.algorithm.coverage_order)
-        dens_cov: Dict[int, int] = {}
-        if cov_order in densmaps:
-            vec = densmaps[cov_order]
-            dens_cov = {int(i): int(v) for i, v in enumerate(vec) if v > 0}
-        else:
-            dens_cov = {}
+            header_line = build_header_line_from_keep(keep_cols)
 
-        for depth in range(1, cfg.algorithm.level_limit + 1):
-            depth_t0 = time.time()
+            # 3) Loop over depths, select magnitude slice, write tiles
+            for i, depth in enumerate(depths_sel):
+                depth_t0 = time.time()
+                m_lo = level_edges[i]
+                m_hi = level_edges[i + 1]
 
-            with _diag_ctx(f"dask_depth_{depth:02d}"):
-
-                # Choose k for this level: density profile + per-level overrides
-                # -----------------------------------------------------------------
-                # 1) Base k_desired from the density profile (can be fractional).
-                #    Two mutually exclusive modes are supported:
-                #      * per-coverage profile  (k_per_cov_initial)
-                #      * total-target profile  (targets_total_initial)
-                # -----------------------------------------------------------------
-                algo = cfg.algorithm
-                mode = (getattr(algo, "density_mode", "constant") or "constant").lower()
-                use_total_profile = getattr(algo, "targets_total_initial", None) is not None
-
-                # Depth index for the profile (start at 1)
-                delta = max(0, depth - 1)
-
-                # Number of coverage cells (non-empty __icov__) at this depth,
-                # used both for the total-target profile and for per-level caps.
-                n_cov = None
-                if use_total_profile or depth in Tmap:
-                    try:
-                        n_cov = int(remainder_ddf["__icov__"].dropna().nunique().compute())
-                    except Exception:
-                        n_cov = 0
-
-                if use_total_profile:
-                    # --- Total-target profile: evolve a total desired count per level ---
-                    T0 = float(algo.targets_total_initial)
-
-                    if mode == "constant":
-                        T_desired = T0
-                    elif mode == "linear":
-                        # Grows linearly with depth (1×, 2×, 3×, ...)
-                        T_desired = T0 * float(1 + delta)
-                    elif mode == "exp":
-                        # Grows exponentially with depth
-                        base = float(getattr(algo, "density_exp_base", 2.0))
-                        if base <= 1.0:
-                            base = 2.0
-                        T_desired = T0 * (base ** float(delta))
-                    elif mode == "log":
-                        # Grows roughly like log2(depth + const)
-                        T_desired = T0 * math.log2(delta + 2.0)
+                with _diag_ctx(f"dask_depth_mag_{depth:02d}"):
+                    if depth != depths_sel[-1]:
+                        mag_mask = (
+                            (remainder_ddf[mag_col_internal] >= m_lo)
+                            & (remainder_ddf[mag_col_internal] < m_hi)
+                        )
                     else:
-                        raise ValueError(f"Unknown density_mode: {algo.density_mode!r}")
-
-                    if n_cov is None or n_cov <= 0:
-                        # No coverage cells → nothing to select on this level
-                        k_desired = 0.0
-                    else:
-                        # Convert total-target profile into per-coverage expectation
-                        k_desired = T_desired / float(n_cov)
-
-                    _log(
-                        f"[DEPTH {depth}] start (density_mode={mode}, "
-                        f"targets_total_initial={T0:.4f}, "
-                        f"n_cov={n_cov}, k_desired_from_total={k_desired:.4f})",
-                        always=True,
-                    )
-                else:
-                    # --- Per-coverage profile: evolve k_per_cov_initial directly ---
-                    k0 = float(algo.k_per_cov_initial)
-
-                    if mode == "constant":
-                        k_desired = k0
-                    elif mode == "linear":
-                        # Grows linearly with depth (1×, 2×, 3×, ...)
-                        k_desired = k0 * float(1 + delta)
-                    elif mode == "exp":
-                        # Grows exponentially with depth
-                        base = float(getattr(algo, "density_exp_base", 2.0))
-                        if base <= 1.0:
-                            base = 2.0
-                        k_desired = k0 * (base ** float(delta))
-                    elif mode == "log":
-                        # Grows roughly like log2(depth + const)
-                        k_desired = k0 * math.log2(delta + 2.0)
-                    else:
-                        raise ValueError(f"Unknown density_mode: {algo.density_mode!r}")
-
-                    _log(
-                        f"[DEPTH {depth}] start (density_mode={mode}, k_desired={k_desired:.4f})",
-                        always=True,
-                    )
-
-                # 2) Per-level override (if provided) always wins over the profile
-                if algo.k_per_cov_per_level and depth in algo.k_per_cov_per_level:
-                    k_desired = float(algo.k_per_cov_per_level[depth])
-
-                # Ensure non-negative
-                k_desired = max(0.0, float(k_desired))
-
-                _log_depth_stats(_log, depth, "start", counts=densmaps[depth])
-
-                # Optionally apply a global total cap T_L for this level:
-                #   - If T_L is set, we compute cap_per_cov = T_L / N_cov_nonempty,
-                #     where N_cov_nonempty is the number of coverage cells (__icov__)
-                #     that still have data in the current remainder.
-                #   - The effective k_desired is then min(k_desired, cap_per_cov).
-                if depth in Tmap:
-                    T_L = float(Tmap[depth])
-                    if n_cov is None:
-                        try:
-                            n_cov = int(remainder_ddf["__icov__"].dropna().nunique().compute())
-                        except Exception:
-                            n_cov = 0
-
-                    if n_cov > 0 and T_L > 0.0:
-                        cap_per_cov = T_L / float(n_cov)
-                        if cap_per_cov < k_desired:
-                            _log(
-                                f"[DEPTH {depth}] applying total cap: T_L={int(T_L)}, "
-                                f"N_cov={n_cov} → cap_per_cov={cap_per_cov:.4f} "
-                                f"(before k_desired={k_desired:.4f})",
-                                always=True,
-                            )
-                            k_desired = cap_per_cov
-                    else:
-                        _log(
-                            f"[DEPTH {depth}] cannot apply total cap: "
-                            f"T_L={T_L}, N_cov={n_cov}",
-                            always=True,
+                        # Last depth is inclusive on the upper bound
+                        mag_mask = (
+                            (remainder_ddf[mag_col_internal] >= m_lo)
+                            & (remainder_ddf[mag_col_internal] <= m_hi)
                         )
 
-                # If after capping k_desired <= 0, there is nothing to select at this level.
-                if k_desired <= 0.0:
-                    _log(f"[DEPTH {depth}] k_desired <= 0 → skipping this depth", always=True)
-                    continue
+                    depth_ddf = remainder_ddf[mag_mask]
 
-                # ------------------------------------------------------------------
-                # Optional density bias: adjust k_per_cov per coverage cell
-                # based on the coverage density (densmaps at coverage_order).
-                #
-                # When density_bias_mode == "none" (default), we keep the original
-                # scalar k_per_cov = k_desired behaviour (backward-compatible).
-                #
-                # When density_bias_mode is "proportional" or "inverse", we build
-                # a dict k_per_cov[icov] and use it in both the candidate step
-                # and the exact reduction step, and we also pass the corresponding
-                # per-coverage expectations to the fractional step.
-                # ------------------------------------------------------------------
-                bias_mode = (getattr(algo, "density_bias_mode", "none") or "none").lower()
-                use_bias = bias_mode in ("proportional", "inverse") and bool(dens_cov)
-
-                k_per_cov_for_selection: Any
-                k_per_cov_desired_map: Optional[Dict[int, float]] = None
-
-                if use_bias:
-                    alpha = float(getattr(algo, "density_bias_exponent", 1.0))
-                    alpha = abs(alpha)  # ensure non-negative exponent
-                    eps = 1e-6
-
-                    # Build raw weights from coverage density
-                    w_raw: Dict[int, float] = {}
-                    for icov, cnt in dens_cov.items():
-                        val = float(cnt) + eps
-                        if bias_mode == "proportional":
-                            w = val ** alpha
-                        else:  # "inverse"
-                            w = val ** (-alpha)
-                        w_raw[int(icov)] = w
-
-                    if not w_raw:
-                        use_bias = False
-                        k_per_cov_for_selection = int(max(1, math.ceil(k_desired)))
-                    else:
-                        w_vals = list(w_raw.values())
-                        mean_w = float(np.mean(w_vals))
-                        if mean_w <= 0.0 or not np.isfinite(mean_w):
-                            use_bias = False
-                            k_per_cov_for_selection = int(max(1, math.ceil(k_desired)))
-                        else:
-                            # Normalize weights to mean 1, so the average k_desired
-                            # across coverage cells remains unchanged.
-                            k_per_cov_desired: Dict[int, float] = {}
-                            for icov, w in w_raw.items():
-                                w_norm = w / mean_w
-                                k_c = max(0.0, k_desired * w_norm)
-                                k_per_cov_desired[int(icov)] = k_c
-
-                            # Convert to integer ceil values per coverage cell
-                            k_per_cov_int: Dict[int, int] = {}
-                            for icov, k_c in k_per_cov_desired.items():
-                                if k_c <= 0.0:
-                                    continue
-                                k_per_cov_int[int(icov)] = max(1, int(math.ceil(k_c)))
-
-                            if not k_per_cov_int:
-                                use_bias = False
-                                k_per_cov_for_selection = int(max(1, math.ceil(k_desired)))
-                            else:
-                                k_per_cov_for_selection = k_per_cov_int
-                                k_per_cov_desired_map = k_per_cov_desired
-                                _log(
-                                    f"[DEPTH {depth}] density bias active: "
-                                    f"mode={bias_mode}, exponent={alpha}, "
-                                    f"base_k_desired={k_desired:.4f}",
-                                    always=True,
-                                )
-                else:
-                    # No bias: original scalar k_per_cov behaviour
-                    k_per_cov_for_selection = int(max(1, math.ceil(k_desired)))
-                    k_per_cov_desired_map = None
-
-                # Narrow DF to needed columns (from remainder)
-                needed_cols = list(remainder_ddf.columns)
-                if cfg.columns.score not in needed_cols:
-                    needed_cols.append(cfg.columns.score)
-                if "__icov__" not in needed_cols:
-                    needed_cols.append("__icov__")
-                sel_ddf = remainder_ddf[needed_cols]
-
-                # Partition-level candidate pass: keep (k + tie_buffer) per __icov__
-                meta_cand = _get_meta_df(sel_ddf)
-
-                cand_ddf = sel_ddf.map_partitions(
-                    _candidates_by_coverage_partition,
-                    score_col=cfg.columns.score,
-                    order_desc=cfg.algorithm.order_desc,
-                    # k_per_cov_for_selection can be either:
-                    #   * scalar int  → uniform k per coverage cell
-                    #   * dict        → per-coverage k[icov]
-                    k_per_cov=k_per_cov_for_selection,
-                    tie_buffer=int(cfg.algorithm.tie_buffer),
-                    ra_col=RA_NAME,
-                    dec_col=DEC_NAME,
-                    meta=meta_cand,
-                )
-
-                # Shuffle so that rows with the same __icov__ are co-located and
-                # groupby operations are efficient and deterministic.
-                #
-                # For standard inputs (parquet / CSV / TSV) we keep the existing
-                # explicit shuffle("__icov__").
-                #
-                # For HATS / LSDB catalogs we *skip* this explicit shuffle and rely
-                # on the native spatial partitioning provided by LSDB. The global
-                # groupby("__icov__") in _reduce_coverage_exact_dask still enforces
-                # the same selection logic, but we avoid disturbing HATS' own layout.
-                target_parts = cfg.cluster.n_workers * cfg.cluster.threads_per_worker * 2
-
-                if (not is_hats) and hasattr(cand_ddf, "shuffle"):
-                    # Non-HATS path: keep the original shuffle-by-coverage behaviour.
-                    cand_ddf = cand_ddf.shuffle(
-                        "__icov__",
-                        npartitions=max(target_parts, sel_ddf.npartitions),
-                    )
-                elif (not is_hats) and hasattr(cand_ddf, "_ddf") and hasattr(cand_ddf._ddf, "shuffle"):
-                    # Non-HATS LSDB-like objects that expose a ._ddf with shuffle support.
-                    base_ddf = cand_ddf._ddf  # type: ignore[attr-defined]
-                    cand_ddf = base_ddf.shuffle(
-                        "__icov__",
-                        npartitions=max(target_parts, sel_ddf.npartitions),
-                    )
-                else:
-                    # HATS / LSDB path (is_hats == True) or objects with no explicit shuffle:
-                    # we keep the existing partitioning and let Dask + LSDB handle data
-                    # movement internally during the groupby("__icov__") step.
-                    _log(
-                        f"[DEPTH {depth}] HATS / LSDB path or no shuffle available "
-                        f"→ keeping native partitioning for __icov__",
-                        always=True,
-                    )
-
-                # ------------------------------------------------------------------
-                # Two modes controlled by avoid_computes_wherever_possible:
-                #
-                #   * When avoid_computes == True:
-                #       - Always use _reduce_coverage_exact_dask (works with both
-                #         scalar and dict k_per_cov, including bias mode).
-                #
-                #   * When avoid_computes == False:
-                #       - Materialize candidates and use the pandas-based
-                #         _reduce_coverage_exact for maximum flexibility.
-                # ------------------------------------------------------------------
-                if avoid_computes:
-                    # Fully Dask-based reduction (supports both scalar and dict k_per_cov)
-                    selected_ddf = _reduce_coverage_exact_dask(
-                        cand_ddf,
-                        score_col=cfg.columns.score,
-                        order_desc=cfg.algorithm.order_desc,
-                        k_per_cov=k_per_cov_for_selection,
-                        ra_col=RA_NAME,
-                        dec_col=DEC_NAME,
-                    )
-                
-                    selected_pdf = selected_ddf.compute()
+                    selected_pdf = depth_ddf.compute()
                     _log_depth_stats(
                         _log,
                         depth,
-                        "selected_before_fractional",
-                        selected_len=len(selected_pdf),
-                    )
-                else:
-                    # Pandas fallback: materialize candidates and use standard reducer
-                    cand_pdf = cand_ddf.compute()
-                    _log_depth_stats(_log, depth, "candidates", candidates_len=len(cand_pdf))
-                
-                    selected_pdf = _reduce_coverage_exact(
-                        cand_pdf,
-                        score_col=cfg.columns.score,
-                        order_desc=cfg.algorithm.order_desc,
-                        k_per_cov=k_per_cov_for_selection,
-                        ra_col=RA_NAME,
-                        dec_col=DEC_NAME,
-                    )
-                    _log_depth_stats(
-                        _log,
-                        depth,
-                        "selected_before_fractional",
+                        "selected",
+                        counts=densmaps[depth],
                         selected_len=len(selected_pdf),
                     )
 
-                # -----------------------------------------------------------------
-                # Fractional k:
-                #   * Global modes behaviour is unchanged.
-                #   * Local modes can optionally use per-coverage k_desired via
-                #     k_per_cov_desired_map (e.g. when density bias is active),
-                #     so that the expected number of objects per pixel follows
-                #     both the integer and fractional parts of the biased k.
-                # -----------------------------------------------------------------
-                selected_pdf, _dropped_pdf = apply_fractional_k_per_cov(
-                    selected_pdf,
-                    k_desired=k_desired,
-                    score_col=cfg.columns.score,
-                    order_desc=cfg.algorithm.order_desc,
-                    mode=getattr(cfg.algorithm, "fractional_mode", "random"),
-                    mode_logic=getattr(cfg.algorithm, "fractional_mode_logic", "auto"),
-                    ra_col=RA_NAME,
-                    dec_col=DEC_NAME,
-                    k_per_cov_desired_map=k_per_cov_desired_map,
-                )
-                _log_depth_stats(_log, depth, "selected", selected_len=len(selected_pdf))
+                    if len(selected_pdf) == 0:
+                        _log(
+                            f"[DEPTH {depth}] mag_global: no rows in "
+                            f"magnitude slice [{m_lo:.6f}, {m_hi:.6f}] → skipping.",
+                            always=True,
+                        )
+                        _log(f"[DEPTH {depth}] done in {_fmt_dur(time.time() - depth_t0)}", always=True)
+                        continue
 
-                # Map selected rows to ipix for this order
-                if len(selected_pdf) > 0:
-                    # Ensure we are working with plain NumPy float arrays
+                    # Map selected rows to HEALPix pixels at this order
                     ra_vals = pd.to_numeric(selected_pdf[RA_NAME], errors="coerce").to_numpy()
                     dec_vals = pd.to_numeric(selected_pdf[DEC_NAME], errors="coerce").to_numpy()
 
-                    theta = np.deg2rad(90.0 - dec_vals)            # colatitude
-                    phi = np.deg2rad(ra_vals % 360.0)              # longitude in [0, 360)
+                    theta = np.deg2rad(90.0 - dec_vals)
+                    phi = np.deg2rad(ra_vals % 360.0)
 
                     NSIDE_L = 1 << depth
                     ipixL = hp.ang2pix(NSIDE_L, theta, phi, nest=True).astype(np.int64)
                     selected_pdf["__ipix__"] = ipixL
 
-                # Write tiles + Allsky(1/2)
-                header_line = build_header_line_from_keep(keep_cols)
-                counts = densmaps[depth]
-                allsky_needed = (depth in (1, 2))
+                    counts = densmaps[depth]
+                    allsky_needed = (depth in (1, 2))
 
-                written_per_ipix, allsky_df = finalize_write_tiles(
-                    out_dir=out_dir,
-                    depth=depth,
-                    header_line=header_line,
-                    ra_col=RA_NAME,
-                    dec_col=DEC_NAME,
-                    counts=counts,
-                    selected=selected_pdf,
-                    order_desc=cfg.algorithm.order_desc,
-                    allsky_collect=allsky_needed,
-                )
-                _log_depth_stats(_log, depth, "written", counts=densmaps[depth], written=written_per_ipix)
-
-                if allsky_needed and allsky_df is not None and len(allsky_df) > 0:
-                    norder_dir = out_dir / f"Norder{depth}"
-                    norder_dir.mkdir(parents=True, exist_ok=True)
-                    tmp_allsky = norder_dir / ".Allsky.tsv.tmp"
-                    final_allsky = norder_dir / "Allsky.tsv"
-
-                    nsrc_tot = int(counts.sum())
-                    nwritten_tot = int(sum(written_per_ipix.values())) if written_per_ipix else 0
-                    nremaining_tot = max(0, nsrc_tot - nwritten_tot)
-                    completeness_header_allsky = f"# Completeness = {nremaining_tot} / {nsrc_tot}\n"
-
-                    header_cols = header_line.strip("\n").split("\t")
-                    allsky_cols = [c for c in header_cols if c in allsky_df.columns]
-                    df_as = allsky_df[allsky_cols].copy()
-
-                    with tmp_allsky.open("w", encoding="utf-8", newline="") as f:
-                        f.write(completeness_header_allsky)
-                        f.write(header_line)
-
-                    obj_cols = df_as.select_dtypes(include=["object", "string"]).columns
-                    if len(obj_cols) > 0:
-                        df_as[obj_cols] = df_as[obj_cols].replace({r"[\t\r\n]": " "}, regex=True)
-
-                    df_as.to_csv(
-                        tmp_allsky,
-                        sep="\t",
-                        index=False,
-                        header=False,
-                        mode="a",
-                        encoding="utf-8",
-                        lineterminator="\n",
+                    written_per_ipix, allsky_df = finalize_write_tiles(
+                        out_dir=out_dir,
+                        depth=depth,
+                        header_line=header_line,
+                        ra_col=RA_NAME,
+                        dec_col=DEC_NAME,
+                        counts=counts,
+                        selected=selected_pdf,
+                        order_desc=cfg.algorithm.order_desc,
+                        allsky_collect=allsky_needed,
                     )
-                    os.replace(tmp_allsky, final_allsky)
+                    _log_depth_stats(
+                        _log,
+                        depth,
+                        "written",
+                        counts=densmaps[depth],
+                        written=written_per_ipix,
+                    )
 
-                # Build per-coverage thresholds and filter remainder
-                thr_cov = build_cov_thresholds(
-                    selected_pdf,
-                    score_col=cfg.columns.score,
-                    order_desc=cfg.algorithm.order_desc,
+                    # Allsky handling (unchanged, but re-used here)
+                    if allsky_needed and allsky_df is not None and len(allsky_df) > 0:
+                        norder_dir = out_dir / f"Norder{depth}"
+                        norder_dir.mkdir(parents=True, exist_ok=True)
+                        tmp_allsky = norder_dir / ".Allsky.tsv.tmp"
+                        final_allsky = norder_dir / "Allsky.tsv"
+
+                        nsrc_tot = int(counts.sum())
+                        nwritten_tot = int(sum(written_per_ipix.values())) if written_per_ipix else 0
+                        nremaining_tot = max(0, nsrc_tot - nwritten_tot)
+                        completeness_header_allsky = f"# Completeness = {nremaining_tot} / {nsrc_tot}\n"
+
+                        header_cols = header_line.strip("\n").split("\t")
+                        allsky_cols = [c for c in header_cols if c in allsky_df.columns]
+                        df_as = allsky_df[allsky_cols].copy()
+
+                        with tmp_allsky.open("w", encoding="utf-8", newline="") as f:
+                            f.write(completeness_header_allsky)
+                            f.write(header_line)
+
+                        obj_cols = df_as.select_dtypes(include=["object", "string"]).columns
+                        if len(obj_cols) > 0:
+                            df_as[obj_cols] = df_as[obj_cols].replace({r"[\t\r\n]": " "}, regex=True)
+
+                        df_as.to_csv(
+                            tmp_allsky,
+                            sep="\t",
+                            index=False,
+                            header=False,
+                            mode="a",
+                            encoding="utf-8",
+                            lineterminator="\n",
+                        )
+                        os.replace(tmp_allsky, final_allsky)
+
+                _log(f"[DEPTH {depth}] done in {_fmt_dur(time.time() - depth_t0)}", always=True)
+
+        else:
+            # =================================================================
+            # Coverage-based selection: uniform expected k per coverage (__icov__)
+            # =================================================================
+            remainder_ddf = ddf_sel
+
+            # If the base expected density and all per-level overrides are non-positive,
+            # there is nothing to select.
+            if (
+                float(cfg.algorithm.k_per_cov_initial) <= 0.0
+                and not (cfg.algorithm.k_per_cov_per_level or {})
+            ):
+                _log(
+                    "[selection] k_per_cov_initial <= 0 and no per-level overrides → "
+                    "nothing to select; finishing early.",
+                    always=True,
                 )
-                if len(thr_cov) == 0:
-                    _log(f"[INFO] Depth {depth}: nothing selected; stopping selection loop.", always=True)
-                    break
+                return
 
-                remainder_meta = _get_meta_df(remainder_ddf)
+            Tmap = cfg.algorithm.targets_total_per_level or {}
 
-                remainder_ddf = remainder_ddf.map_partitions(
-                    filter_remainder_by_coverage_partition,
-                    score_expr=cfg.columns.score,
-                    order_desc=cfg.algorithm.order_desc,
-                    thr_cov=thr_cov,
-                    ra_col=RA_NAME,
-                    dec_col=DEC_NAME,
-                    meta=remainder_meta,
-                )
+            # Pre-compute coverage density map (per __icov__) from densmaps
+            cov_order = int(cfg.algorithm.coverage_order)
+            dens_cov: Dict[int, int] = {}
+            if cov_order in densmaps:
+                vec = densmaps[cov_order]
+                dens_cov = {int(i): int(v) for i, v in enumerate(vec) if v > 0}
+            else:
+                dens_cov = {}
 
-                # Persist the filtered remainder only when we explicitly want
-                # high in-memory performance. In low-memory mode we avoid
-                # materializing this large dataframe in RAM.
-                if persist_ddfs:
-                    remainder_ddf = remainder_ddf.persist()
-                    wait(remainder_ddf)
+            for depth in range(1, cfg.algorithm.level_limit + 1):
+                depth_t0 = time.time()
 
-                # Optionally compute remainder size (can be expensive on huge datasets)
-                #rem_len = None
-                #if depth == 1 or depth == cfg.algorithm.level_limit:
-                #    try:
-                #        rem_len = int(remainder_ddf.shape[0].compute())
-                #    except Exception:
-                #        rem_len = None
-                #
-                #_log_depth_stats(_log, depth, "filtered", remainder_len=rem_len)
+                with _diag_ctx(f"dask_depth_{depth:02d}"):
 
-            _log(f"[DEPTH {depth}] done in {_fmt_dur(time.time() - depth_t0)}", always=True)
+                    # (a) compute k_desired for this depth (same logic as before)
+                    algo = cfg.algorithm
+                    mode = (getattr(algo, "density_mode", "constant") or "constant").lower()
+                    use_total_profile = getattr(algo, "targets_total_initial", None) is not None
+
+                    delta = max(0, depth - 1)
+                    n_cov = None
+                    if use_total_profile or depth in Tmap:
+                        try:
+                            n_cov = int(remainder_ddf["__icov__"].dropna().nunique().compute())
+                        except Exception:
+                            n_cov = 0
+
+                    if use_total_profile:
+                        T0 = float(algo.targets_total_initial)
+
+                        if mode == "constant":
+                            T_desired = T0
+                        elif mode == "linear":
+                            T_desired = T0 * float(1 + delta)
+                        elif mode == "exp":
+                            base = float(getattr(algo, "density_exp_base", 2.0))
+                            if base <= 1.0:
+                                base = 2.0
+                            T_desired = T0 * (base ** float(delta))
+                        elif mode == "log":
+                            T_desired = T0 * math.log2(delta + 2.0)
+                        else:
+                            raise ValueError(f"Unknown density_mode: {algo.density_mode!r}")
+
+                        if n_cov is None or n_cov <= 0:
+                            k_desired = 0.0
+                        else:
+                            k_desired = T_desired / float(n_cov)
+
+                        _log(
+                            f"[DEPTH {depth}] start (density_mode={mode}, "
+                            f"targets_total_initial={T0:.4f}, "
+                            f"n_cov={n_cov}, k_desired_from_total={k_desired:.4f})",
+                            always=True,
+                        )
+                    else:
+                        k0 = float(algo.k_per_cov_initial)
+
+                        if mode == "constant":
+                            k_desired = k0
+                        elif mode == "linear":
+                            k_desired = k0 * float(1 + delta)
+                        elif mode == "exp":
+                            base = float(getattr(algo, "density_exp_base", 2.0))
+                            if base <= 1.0:
+                                base = 2.0
+                            k_desired = k0 * (base ** float(delta))
+                        elif mode == "log":
+                            k_desired = k0 * math.log2(delta + 2.0)
+                        else:
+                            raise ValueError(f"Unknown density_mode: {algo.density_mode!r}")
+
+                        _log(
+                            f"[DEPTH {depth}] start (density_mode={mode}, k_desired={k_desired:.4f})",
+                            always=True,
+                        )
+
+                    if algo.k_per_cov_per_level and depth in algo.k_per_cov_per_level:
+                        k_desired = float(algo.k_per_cov_per_level[depth])
+
+                    k_desired = max(0.0, float(k_desired))
+
+                    _log_depth_stats(_log, depth, "start", counts=densmaps[depth])
+
+                    if depth in Tmap:
+                        T_L = float(Tmap[depth])
+                        if n_cov is None:
+                            try:
+                                n_cov = int(remainder_ddf["__icov__"].dropna().nunique().compute())
+                            except Exception:
+                                n_cov = 0
+
+                        if n_cov > 0 and T_L > 0.0:
+                            cap_per_cov = T_L / float(n_cov)
+                            if cap_per_cov < k_desired:
+                                _log(
+                                    f"[DEPTH {depth}] applying total cap: T_L={int(T_L)}, "
+                                    f"N_cov={n_cov} → cap_per_cov={cap_per_cov:.4f} "
+                                    f"(before k_desired={k_desired:.4f})",
+                                    always=True,
+                                )
+                                k_desired = cap_per_cov
+                        else:
+                            _log(
+                                f"[DEPTH {depth}] cannot apply total cap: "
+                                f"T_L={T_L}, N_cov={n_cov}",
+                                always=True,
+                            )
+
+                    if k_desired <= 0.0:
+                        _log(f"[DEPTH {depth}] k_desired <= 0 → skipping this depth", always=True)
+                        continue
+
+                    # (b) density bias (unchanged logic, but now only in coverage mode)
+                    bias_mode = (getattr(algo, "density_bias_mode", "none") or "none").lower()
+                    use_bias = bias_mode in ("proportional", "inverse") and bool(dens_cov)
+
+                    k_per_cov_for_selection: Any
+                    k_per_cov_desired_map: Optional[Dict[int, float]] = None
+
+                    if use_bias:
+                        alpha = float(getattr(algo, "density_bias_exponent", 1.0))
+                        alpha = abs(alpha)
+                        eps = 1e-6
+
+                        w_raw: Dict[int, float] = {}
+                        for icov, cnt in dens_cov.items():
+                            val = float(cnt) + eps
+                            if bias_mode == "proportional":
+                                w = val ** alpha
+                            else:
+                                w = val ** (-alpha)
+                            w_raw[int(icov)] = w
+
+                        if not w_raw:
+                            use_bias = False
+                            k_per_cov_for_selection = int(max(1, math.ceil(k_desired)))
+                        else:
+                            w_vals = list(w_raw.values())
+                            mean_w = float(np.mean(w_vals))
+                            if mean_w <= 0.0 or not np.isfinite(mean_w):
+                                use_bias = False
+                                k_per_cov_for_selection = int(max(1, math.ceil(k_desired)))
+                            else:
+                                k_per_cov_desired: Dict[int, float] = {}
+                                for icov, w in w_raw.items():
+                                    w_norm = w / mean_w
+                                    k_c = max(0.0, k_desired * w_norm)
+                                    k_per_cov_desired[int(icov)] = k_c
+
+                                k_per_cov_int: Dict[int, int] = {}
+                                for icov, k_c in k_per_cov_desired.items():
+                                    if k_c <= 0.0:
+                                        continue
+                                    k_per_cov_int[int(icov)] = max(1, int(math.ceil(k_c)))
+
+                                if not k_per_cov_int:
+                                    use_bias = False
+                                    k_per_cov_for_selection = int(max(1, math.ceil(k_desired)))
+                                else:
+                                    k_per_cov_for_selection = k_per_cov_int
+                                    k_per_cov_desired_map = k_per_cov_desired
+                                    _log(
+                                        f"[DEPTH {depth}] density bias active: "
+                                        f"mode={bias_mode}, exponent={alpha}, "
+                                        f"base_k_desired={k_desired:.4f}",
+                                        always=True,
+                                    )
+                    else:
+                        k_per_cov_for_selection = int(max(1, math.ceil(k_desired)))
+                        k_per_cov_desired_map = None
+
+                    # (c) candidate selection & exact reduction (same logic as before)
+                    needed_cols = list(remainder_ddf.columns)
+                    if cfg.columns.score not in needed_cols:
+                        needed_cols.append(cfg.columns.score)
+                    if "__icov__" not in needed_cols:
+                        needed_cols.append("__icov__")
+                    sel_ddf = remainder_ddf[needed_cols]
+
+                    meta_cand = _get_meta_df(sel_ddf)
+
+                    cand_ddf = sel_ddf.map_partitions(
+                        _candidates_by_coverage_partition,
+                        score_col=cfg.columns.score,
+                        order_desc=cfg.algorithm.order_desc,
+                        k_per_cov=k_per_cov_for_selection,
+                        tie_buffer=int(cfg.algorithm.tie_buffer),
+                        ra_col=RA_NAME,
+                        dec_col=DEC_NAME,
+                        meta=meta_cand,
+                    )
+
+                    target_parts = cfg.cluster.n_workers * cfg.cluster.threads_per_worker * 2
+
+                    if (not is_hats) and hasattr(cand_ddf, "shuffle"):
+                        cand_ddf = cand_ddf.shuffle(
+                            "__icov__",
+                            npartitions=max(target_parts, sel_ddf.npartitions),
+                        )
+                    elif (not is_hats) and hasattr(cand_ddf, "_ddf") and hasattr(cand_ddf._ddf, "shuffle"):
+                        base_ddf = cand_ddf._ddf  # type: ignore[attr-defined]
+                        cand_ddf = base_ddf.shuffle(
+                            "__icov__",
+                            npartitions=max(target_parts, sel_ddf.npartitions),
+                        )
+                    else:
+                        _log(
+                            f"[DEPTH {depth}] HATS / LSDB path or no shuffle available "
+                            f"→ keeping native partitioning for __icov__",
+                            always=True,
+                        )
+
+                    if avoid_computes:
+                        selected_ddf = _reduce_coverage_exact_dask(
+                            cand_ddf,
+                            score_col=cfg.columns.score,
+                            order_desc=cfg.algorithm.order_desc,
+                            k_per_cov=k_per_cov_for_selection,
+                            ra_col=RA_NAME,
+                            dec_col=DEC_NAME,
+                        )
+
+                        selected_pdf = selected_ddf.compute()
+                        _log_depth_stats(
+                            _log,
+                            depth,
+                            "selected_before_fractional",
+                            selected_len=len(selected_pdf),
+                        )
+                    else:
+                        cand_pdf = cand_ddf.compute()
+                        _log_depth_stats(_log, depth, "candidates", candidates_len=len(cand_pdf))
+
+                        selected_pdf = _reduce_coverage_exact(
+                            cand_pdf,
+                            score_col=cfg.columns.score,
+                            order_desc=cfg.algorithm.order_desc,
+                            k_per_cov=k_per_cov_for_selection,
+                            ra_col=RA_NAME,
+                            dec_col=DEC_NAME,
+                        )
+                        _log_depth_stats(
+                            _log,
+                            depth,
+                            "selected_before_fractional",
+                            selected_len=len(selected_pdf),
+                        )
+
+                    selected_pdf, _dropped_pdf = apply_fractional_k_per_cov(
+                        selected_pdf,
+                        k_desired=k_desired,
+                        score_col=cfg.columns.score,
+                        order_desc=cfg.algorithm.order_desc,
+                        mode=getattr(cfg.algorithm, "fractional_mode", "random"),
+                        mode_logic=getattr(cfg.algorithm, "fractional_mode_logic", "auto"),
+                        ra_col=RA_NAME,
+                        dec_col=DEC_NAME,
+                        k_per_cov_desired_map=k_per_cov_desired_map,
+                    )
+                    _log_depth_stats(_log, depth, "selected", selected_len=len(selected_pdf))
+
+                    if len(selected_pdf) > 0:
+                        ra_vals = pd.to_numeric(selected_pdf[RA_NAME], errors="coerce").to_numpy()
+                        dec_vals = pd.to_numeric(selected_pdf[DEC_NAME], errors="coerce").to_numpy()
+
+                        theta = np.deg2rad(90.0 - dec_vals)
+                        phi = np.deg2rad(ra_vals % 360.0)
+
+                        NSIDE_L = 1 << depth
+                        ipixL = hp.ang2pix(NSIDE_L, theta, phi, nest=True).astype(np.int64)
+                        selected_pdf["__ipix__"] = ipixL
+
+                    header_line = build_header_line_from_keep(keep_cols)
+                    counts = densmaps[depth]
+                    allsky_needed = (depth in (1, 2))
+
+                    written_per_ipix, allsky_df = finalize_write_tiles(
+                        out_dir=out_dir,
+                        depth=depth,
+                        header_line=header_line,
+                        ra_col=RA_NAME,
+                        dec_col=DEC_NAME,
+                        counts=counts,
+                        selected=selected_pdf,
+                        order_desc=cfg.algorithm.order_desc,
+                        allsky_collect=allsky_needed,
+                    )
+                    _log_depth_stats(_log, depth, "written", counts=densmaps[depth], written=written_per_ipix)
+
+                    if allsky_needed and allsky_df is not None and len(allsky_df) > 0:
+                        norder_dir = out_dir / f"Norder{depth}"
+                        norder_dir.mkdir(parents=True, exist_ok=True)
+                        tmp_allsky = norder_dir / ".Allsky.tsv.tmp"
+                        final_allsky = norder_dir / "Allsky.tsv"
+
+                        nsrc_tot = int(counts.sum())
+                        nwritten_tot = int(sum(written_per_ipix.values())) if written_per_ipix else 0
+                        nremaining_tot = max(0, nsrc_tot - nwritten_tot)
+                        completeness_header_allsky = f"# Completeness = {nremaining_tot} / {nsrc_tot}\n"
+
+                        header_cols = header_line.strip("\n").split("\t")
+                        allsky_cols = [c for c in header_cols if c in allsky_df.columns]
+                        df_as = allsky_df[allsky_cols].copy()
+
+                        with tmp_allsky.open("w", encoding="utf-8", newline="") as f:
+                            f.write(completeness_header_allsky)
+                            f.write(header_line)
+
+                        obj_cols = df_as.select_dtypes(include=["object", "string"]).columns
+                        if len(obj_cols) > 0:
+                            df_as[obj_cols] = df_as[obj_cols].replace({r"[\t\r\n]": " "}, regex=True)
+
+                        df_as.to_csv(
+                            tmp_allsky,
+                            sep="\t",
+                            index=False,
+                            header=False,
+                            mode="a",
+                            encoding="utf-8",
+                            lineterminator="\n",
+                        )
+                        os.replace(tmp_allsky, final_allsky)
+
+                    thr_cov = build_cov_thresholds(
+                        selected_pdf,
+                        score_col=cfg.columns.score,
+                        order_desc=cfg.algorithm.order_desc,
+                    )
+                    if len(thr_cov) == 0:
+                        _log(f"[INFO] Depth {depth}: nothing selected; stopping selection loop.", always=True)
+                        break
+
+                    remainder_meta = _get_meta_df(remainder_ddf)
+
+                    remainder_ddf = remainder_ddf.map_partitions(
+                        filter_remainder_by_coverage_partition,
+                        score_expr=cfg.columns.score,
+                        order_desc=cfg.algorithm.order_desc,
+                        thr_cov=thr_cov,
+                        ra_col=RA_NAME,
+                        dec_col=DEC_NAME,
+                        meta=remainder_meta,
+                    )
+
+                    if persist_ddfs:
+                        remainder_ddf = remainder_ddf.persist()
+                        wait(remainder_ddf)
+
+                _log(f"[DEPTH {depth}] done in {_fmt_dur(time.time() - depth_t0)}", always=True)
 
     try:
         # Choose diagnostics mode: global vs per-step vs off.
@@ -2691,6 +3067,38 @@ def load_config(path: str) -> Config:
         k_per_cov_initial = 1.0
         targets_total_initial = None
 
+    # Fixed per-depth approximate totals for mag_global selection (depths 1–3).
+    n_1_raw = algo.get("n_1", None)
+    n_2_raw = algo.get("n_2", None)
+    n_3_raw = algo.get("n_3", None)
+
+    # Enforce prefix rule: you cannot set n_2 without n_1, or n_3 without n_2.
+    if n_2_raw is not None and n_1_raw is None:
+        raise ValueError(
+            "algorithm.n_2 is set but algorithm.n_1 is missing. "
+            "These controls must be provided in order: n_1, then n_2, then n_3."
+        )
+    if n_3_raw is not None and (n_1_raw is None or n_2_raw is None):
+        raise ValueError(
+            "algorithm.n_3 is set but algorithm.n_1 and algorithm.n_2 are not "
+            "both defined. These controls must be provided in order: n_1, n_2, n_3."
+        )
+
+    def _to_int_or_none(x, name: str) -> Optional[int]:
+        if x is None:
+            return None
+        try:
+            v = int(x)
+        except Exception:
+            raise ValueError(f"algorithm.{name} must be an integer, got {x!r}.")
+        if v < 0:
+            raise ValueError(f"algorithm.{name} must be non-negative, got {v}.")
+        return v
+
+    n_1 = _to_int_or_none(n_1_raw, "n_1")
+    n_2 = _to_int_or_none(n_2_raw, "n_2")
+    n_3 = _to_int_or_none(n_3_raw, "n_3")
+
     cfg = Config(
         input=InputCfg(
             paths=y["input"]["paths"],
@@ -2705,6 +3113,8 @@ def load_config(path: str) -> Config:
             keep=y["columns"].get("keep"),
         ),
         algorithm=AlgoOpts(
+            selection_mode=str(algo.get("selection_mode", "coverage")).lower(),
+
             level_limit=level_limit,
             level_coverage=level_coverage,
             order_desc=bool(algo.get("order_desc", False)),
@@ -2740,6 +3150,15 @@ def load_config(path: str) -> Config:
 
             # Use HATS/LSDB partitions as coverage cells when True
             use_hats_as_coverage=bool(algo.get("use_hats_as_coverage", False)),
+
+            # mag_global selection controls
+            mag_column=algo.get("mag_column"),
+            mag_min=algo.get("mag_min"),
+            mag_max=algo.get("mag_max"),
+            mag_hist_nbins=int(algo.get("mag_hist_nbins", 256)),
+            n_1=n_1,
+            n_2=n_2,
+            n_3=n_3,
         ),
         cluster=ClusterCfg(
             mode=y["cluster"].get("mode", "local"),
