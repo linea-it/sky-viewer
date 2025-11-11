@@ -103,11 +103,20 @@ def _build_input_ddf(paths: List[str], cfg: Config) -> tuple[Any, str, str, List
         DEC_NAME = dec_col
 
         # Build keep_cols in a deterministic order:
-        #   RA, DEC, score dependencies, then requested or all columns.
+        #   RA, DEC, score dependencies, then requested extras (if any).
         score_dependencies = [c for c in score_tokens if c in available_cols]
 
-        candidate = requested_keep if requested_keep else available_cols
+        # Always include RA/DEC and score dependencies.
         must_keep_resolved = [RA_NAME, DEC_NAME, *score_dependencies]
+
+        # Add the magnitude column when using mag_global mode.
+        if mag_col_cfg and mag_col_cfg in available_cols:
+            must_keep_resolved.append(mag_col_cfg)
+
+        # Only include user-requested columns if explicitly provided.
+        # If the user did not specify "columns.keep", do NOT fall back to all columns;
+        # keep only the minimal required subset (RA/DEC, score deps, mag_col if any).
+        candidate = requested_keep
 
         seen = set()
         keep_cols: List[str] = []
@@ -174,7 +183,9 @@ def _build_input_ddf(paths: List[str], cfg: Config) -> tuple[Any, str, str, List
     if mag_col_cfg and mag_col_cfg in available_cols:
         must_keep.append(mag_col_cfg)
 
-    candidate = requested_keep if requested_keep else available_cols
+    # If the user did not request extra columns, keep only the minimal set:
+    # RA/DEC, score dependencies and (in mag_global mode) mag_column.
+    candidate = requested_keep
 
     seen = set()
     keep_cols = []

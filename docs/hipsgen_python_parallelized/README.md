@@ -1,168 +1,211 @@
-# HiPS Catalog Pipeline (Dask + Parquet / HATS)
+# HiPS Catalog Pipeline (`hipsgen_cat`)
 
-This pipeline generates HiPS-compliant catalog hierarchies from large input tables using Dask.  
+This package builds HiPS-compliant catalog hierarchies from large input tables using Dask and LSDB.  
 It reproduces the general directory and metadata structure recognized by Aladin, following the logic of the CDS *Hipsgen-cat.jar* tool, but implemented in Python for large-scale, parallelized workflows.
 
-The pipeline supports **two main selection modes**, each with distinct purposes and parameters.
+The pipeline supports two main selection modes, configured in the YAML under `algorithm.selection_mode`:
+
+- `coverage`   → coverage-based selection per HEALPix / HATS cell.
+- `mag_global` → global magnitude-complete selection.
 
 ---
 
-## 1. Shared Core Functionality (common to both modes)
+## 1. Environment Setup
 
-These options control the general HiPS hierarchy generation process and apply to both modes.
+All required packages are specified in the `environment.yaml` file at the repository root.
 
-- **Inputs**: Parquet/CSV/TSV tables or HATS/LSDB catalogs (`input.format`).
-- **HiPS depth control**:
-  - `level_limit`: maximum HiPS order to write.
-  - `level_coverage`: order used for the MOC and global coverage.
-  - `coverage_order`: order for coverage cells (`__icov__`).
-- **Parallelism**: full Dask-based execution, with cluster configuration under `cluster:`.
-- **Outputs**:
-  - Per-depth tiles (`Norder*/Dir*/Npix*.tsv`).
-  - All-sky files (`Allsky.tsv`).
-  - Density maps (`densmap_o<depth>.fits`).
-  - Coverage maps (`Moc.fits`, `Moc.json`).
-  - Metadata descriptors (`properties`, `metadata.xml`).
-- **Reproducibility**:
-  - Automatic log files, `arguments`, and YAML config snapshots.
+### 1.1 Create and activate the environment
+
+From the repository root:
+
+    conda env create -f environment.yaml
+    conda activate hipsenv
+
+(adjust the environment name if it differs in `environment.yaml`)
 
 ---
 
-## 2. Coverage-Based Mode (`selection_mode: coverage`)
+## 2. Using `hipsgen_cat` from the source tree
 
-This mode performs selection based on coverage cells (`__icov__`), applying density laws and optional fractional randomization.
+There is no separate installation step required if you run from the source tree.
 
-### Parameters (exclusive to coverage mode)
+From the repository root (the directory that contains the `hipsgen_cat/` package):
 
-- **Coverage partitioning**
-  - `use_hats_as_coverage`: use HATS partitions instead of HEALPix cells (for HATS input only).
-  - `coverage_order`: HEALPix order for coverage cells.
+    export PYTHONPATH=$PWD:$PYTHONPATH
 
-- **Score ordering**
-  - `order_desc`:
-    - `false` → ascending (lower score is better).
-    - `true` → descending (higher score is better).
-
-- **Density scaling**
-  - `density_mode`: `"constant"`, `"linear"`, `"exp"`, or `"log"`.
-  - `k_per_cov_initial`: expected rows per coverage cell at depth 1.
-  - `targets_total_initial`: alternative to `k_per_cov_initial`.
-  - `density_exp_base`: exponential growth base when `density_mode: exp`.
-
-- **Biasing**
-  - `density_bias_mode`: `"none"`, `"proportional"`, or `"inverse"`.
-  - `density_bias_exponent`: power-law exponent controlling bias strength.
-
-- **Overrides**
-  - `k_per_cov_per_level`: manual overrides of `k_per_cov` per depth.
-  - `targets_total_per_level`: global caps for total number of sources per depth.
-
-- **Fractional sampling**
-  - `fractional_mode`: `"random"` or `"score"`.
-  - `fractional_mode_logic`: `"local"` or `"global"`.
-  - `tie_buffer`: extra candidates per coverage cell to mitigate score ties.
-
-### When to use
-
-- When you want uniform spatial coverage and density-balanced sampling.
-- When selection is driven by positional density or ranking scores.
-- When you want hierarchical downsampling per HiPS order.
+Now Python can import `hipsgen_cat` directly from the source tree.
 
 ---
 
-## 3. Global Magnitude-Complete Mode (`selection_mode: mag_global`)
+## 3. Configuration Files
 
-This mode ensures a magnitude-complete catalog by analyzing the full magnitude distribution before per-depth selection.
+The pipeline is driven by a YAML configuration file.
 
-### Parameters (exclusive to mag_global mode)
+- A fully annotated template, kept in sync with the code, is provided as:
 
-- **Magnitude column**
-  - `mag_column`: column name used for global ordering and histogram.
+  - `config.template.yaml`
 
-- **Magnitude range**
-  - `mag_min` / `mag_max`: brightness limits for completeness.
-    - If omitted:
-      - `mag_min` = lowest magnitude in the dataset.
-      - `mag_max` = **mode (peak)** of the global magnitude histogram.
+- To create your own configuration:
 
-- **Histogram and quantiles**
-  - `mag_hist_nbins`: number of bins used for global histogram (controls quantile precision).
+  1. Copy the template:
 
-- **Global targets**
-  - `n_1`, `n_2`, `n_3`: optional approximate total target counts per depth.  
-    Must be provided cumulatively (e.g. `n_2` requires `n_1`).
+         cp config.template.yaml config.yaml
 
-### When to use
+  2. Edit `config.yaml` to match your catalog and desired selection settings.
 
-- When you want **photometric completeness** rather than spatial uniformity.
-- When you aim for consistent magnitude limits across depths.
-- When physical brightness is the main selection variable.
+There may also be additional example configurations under subdirectories in the repository (for example `configs/`), illustrating typical use cases.
 
 ---
 
 ## 4. Running the Pipeline
 
-### Option 1 — As a library
+The pipeline can be executed either as a library or via the command line interface.
 
-```python
-from hipsgen_cat import load_config, run_pipeline
+### 4.1 Run as a library (Python)
 
-cfg = load_config("config.yaml")
-run_pipeline(cfg)
-```
+Example:
 
-### Option 2 — From the command line
+    from hipsgen_cat import load_config, run_pipeline
 
-```bash
-python -m hipsgen_cat.cli --config config.yaml
-```
+    cfg = load_config("config.yaml")  # your customized config
+    run_pipeline(cfg)
 
-### Option 3 — On the LIneA Apollo cluster (SLURM)
+This is the recommended approach when integrating `hipsgen_cat` into notebooks or larger Python workflows.
 
-Submit via SLURM job script:
+### 4.2 Run from the command line
 
-```bash
-sbatch run_hips.sbatch
-```
+The CLI entry point lives in `hipsgen_cat.cli` and accepts a single required argument: `--config`.
 
-Monitor progress:
+From the repository root:
 
-```bash
-squeue -u $USER
-```
+    python -m hipsgen_cat.cli --config config.yaml
+
+This will:
+
+- Read the configuration.
+- Build the input collection (Parquet/CSV/TSV via Dask, or HATS via LSDB).
+- Compute densmaps and MOC.
+- Run the selection (coverage or mag_global).
+- Write HiPS tiles and metadata under `output.out_dir`.
+
+### 4.3 Running on a SLURM cluster
+
+To run on a SLURM cluster:
+
+1. Configure the `cluster` section in your `config.yaml` with:
+
+   - `cluster.mode: slurm`
+   - Appropriate values for `cluster.n_workers`, `cluster.threads_per_worker`, `cluster.memory_per_worker`
+   - SLURM-specific options under `cluster.slurm` (queue, account, job directives, diagnostics mode)
+
+2. Create a batch script. Use ```run_hips.sbatch```script as an example.
+
+3. Submit and monitor:
+
+       sbatch run_hips.sbatch
+       squeue -u $USER
 
 ---
 
 ## 5. Output Structure
 
-Each HiPS order (`NorderX`) includes:
-- `Dir*/Npix*.tsv`: per-cell tiles with completeness headers.
-- `Allsky.tsv`: all-sky view for that order.
-- `densmap_o<depth>.fits`: density maps (depth < 13).
-- `Moc.fits`, `Moc.json`: coverage maps.
-- `metadata.xml`, `properties`: HiPS metadata descriptors.
-- `arguments`, logs, and config snapshots for reproducibility.
+For a given `output.out_dir`, the pipeline creates a HiPS directory structure including:
+
+- `Norder*/Dir*/Npix*.tsv`  
+  Per-depth tiles (one TSV per HEALPix cell), containing the selected rows and the configured columns.
+
+- `Norder*/Allsky.tsv`  
+  Optional all-sky tables (for some depths), aggregating all tiles at a given order.
+
+- `densmap_o<depth>.fits`  
+  Density maps (per-depth HEALPix counts) for all depths `0..algorithm.level_limit`.
+
+- `Moc.fits`, `Moc.json`  
+  Multi-Order Coverage maps derived from the densmap at `algorithm.level_coverage`.
+
+- `properties`, `metadata.xml`  
+  HiPS metadata descriptors recognized by Aladin and other HiPS clients.
+
+- `process.log`  
+  Main log file for the run, including configuration echoing and progress messages.
+
+- `arguments`  
+  Text file containing a compact snapshot of the effective arguments and configuration, for reproducibility.
+
+No extra YAML snapshot is written by the pipeline; configuration is documented via `arguments` and `process.log`.
 
 ---
 
-## 6. Mode Comparison
+## 6. Configuration Overview
 
-| Feature | Coverage Mode | Mag_Global Mode |
-|----------|----------------|----------------|
-| Partition basis | HEALPix or HATS cells | Global (no spatial partition) |
-| Main selection variable | Score / density | Magnitude |
-| Completeness goal | Uniform sky density | Photometric completeness |
-| Adaptive with depth | Yes (density laws) | Yes (global quantiles) |
-| Parameters | `k_per_cov`, `density_mode`, `fractional_mode` | `mag_column`, `mag_min/max`, `n_1/n_2/n_3` |
-| Typical use | Uniform sampling | Brightness-limited sampling |
+All runtime configuration is controlled via a YAML file. The main top-level sections are:
+
+- `input:`  
+  How the input catalog(s) are read.
+  - Supported formats: `parquet`, `csv`, `tsv`, `hats`.
+  - Paths (with wildcards) defined in `input.paths`.
+
+- `columns:`  
+  How RA/DEC are mapped and how the score is defined.
+  - `ra`, `dec` must be in degrees; the pipeline normalizes RA and validates DEC.
+  - `score` is a Python expression (or a single column) used in coverage mode.
+  - `keep` lists extra columns to preserve; if omitted, only the minimal required subset is kept (RA/DEC, score dependencies, and `mag_column` in mag_global mode).
+
+- `algorithm:`  
+  Selection mode and per-depth logic.
+  - `selection_mode`: `coverage` or `mag_global`.
+  - `level_limit`, `level_coverage`, `coverage_order` control HiPS depth and coverage maps.
+  - Coverage mode–specific parameters include:
+    - `use_hats_as_coverage`, `order_desc`
+    - `density_mode`, `k_per_cov_initial`, `targets_total_initial`, `density_exp_base`
+    - `density_bias_mode`, `density_bias_exponent`
+    - `k_per_cov_per_level`, `targets_total_per_level`
+    - `fractional_mode`, `fractional_mode_logic`, `tie_buffer`
+  - Mag-global–specific parameters include:
+    - `mag_column`, `mag_min`, `mag_max`
+    - `mag_hist_nbins`
+    - `n_1`, `n_2`, `n_3` (optional global targets per depth)
+
+- `cluster:`  
+  Dask cluster configuration.
+  - `mode`: `local` or `slurm`.
+  - `n_workers`, `threads_per_worker`, `memory_per_worker`.
+  - `persist_ddfs` and `avoid_computes_wherever_possible` for memory vs. throughput trade-offs.
+  - Under `slurm`, queue/account and SLURM directives, plus diagnostics options.
+
+- `output:`  
+  HiPS output directory and metadata.
+  - `out_dir`: root directory for the HiPS hierarchy.
+  - `cat_name`, `target`, `creator_did`, `obs_title` for HiPS metadata.
+
+The full annotated configuration template, kept in sync with the current implementation, is:
+
+- `config.template.yaml`
+
+Use that file as the authoritative reference for per-parameter behavior and defaults.
 
 ---
 
-## 7. Acknowledgment
+## 7. Mode Comparison (Conceptual Summary)
+
+| Feature | Coverage Mode (`coverage`) | Mag Global Mode (`mag_global`) |
+|----------|-----------------------------|--------------------------------|
+| Partition basis | HEALPix or HATS coverage cells (`__icov__`) | Global sample (no explicit coverage cells) |
+| Main selection metric | Score (`columns.score`) + density profile | Magnitude (`algorithm.mag_column`) |
+| Completeness goal | Spatial balance / density control | Magnitude completeness |
+| Depth behavior | Profile-driven (`density_mode`, `k_per_cov_*`, `targets_total_*`) | Histogram-based (`mag_hist_nbins`, `n_1/n_2/n_3`) |
+| Bias options | `density_bias_mode`, `density_bias_exponent` | Not applicable (no density bias) |
+| Typical use | Uniform or density-aware spatial downsampling | Brightness-limited, magnitude-complete catalogs |
+
+
+---
+
+## 8. Acknowledgment
 
 This work was inspired by the HiPS Catalog tools developed at the CDS,  
 whose design and public documentation provided valuable guidance for this independent reimplementation.
 
-**References:**
-- CDS (Strasbourg Astronomical Data Center): https://cds.unistra.fr/  
+References:
+
+- CDS (Strasbourg Astronomical Data Center): https://cds.unistra.fr/
 - HiPSgen-cat (official Java implementation): https://aladin.cds.unistra.fr/hips/Hipsgen-cat.gml
