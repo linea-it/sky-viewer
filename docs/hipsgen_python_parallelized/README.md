@@ -3,133 +3,163 @@
 This pipeline generates HiPS-compliant catalog hierarchies from large input tables using Dask.  
 It reproduces the general directory and metadata structure recognized by Aladin, following the logic of the CDS *Hipsgen-cat.jar* tool, but implemented in Python for large-scale, parallelized workflows.
 
-The pipeline:
-- Reads large catalogs in a fully parallelized way:
-  - Standard files: Parquet or CSV/TSV.
-  - LSDB / HATS catalogs: using `lsdb.open_catalog(...)` to keep the native partitioning.
-- Groups sources by HEALPix coverage cells (`coverage_order`) and performs uniform selection per HiPS depth (`level_limit`).  
-- Applies density-based selection rules and probabilistic sampling (`fractional_mode`).  
-- Produces HiPS-compatible outputs, including per-depth tiles (`Norder*` directories), `Allsky.tsv`, MOC files (`Moc.fits` and `Moc.json`), and metadata descriptors (`properties`, `metadata.xml`).  
-- Supports both low-memory (out-of-core) and high-throughput (in-memory) execution modes depending on cluster configuration.  
-- When using HATS/LSDB catalogs, reuses the native HEALPix nested index when present (e.g. `_healpix_<order>`) to derive coverage and density maps efficiently.
+The pipeline supports **two main selection modes**, each with distinct purposes and parameters.
 
 ---
-## 1. Clone the repository
 
-```bash
-git clone https://github.com/linea-it/sky-viewer.git
-```
+## 1. Shared Core Functionality (common to both modes)
 
----
-## 2. Navigate to the pipeline directory
+These options control the general HiPS hierarchy generation process and apply to both modes.
 
-```bash
-cd sky-viewer/docs/hipsgen_python_parallelized
-```
-
----
-## 3. Create and activate the Conda environment
-
-If you are running this on an **OnDemand JupyterHub** environment,  
-it is recommended to install Miniconda and create the environment **inside your `$SCRIPTS` area** to avoid quota or permission issues:
-
-```bash
-conda env create -f environment.yaml -p $SCRIPTS/hipsgencat_env
-conda activate $SCRIPTS/hipsgencat_env
-```
-
-If you are running locally or on a standard system, simply create it with a name:
-
-```bash
-conda env create -f environment.yaml --name hipsgencat_env
-conda activate hipsgencat_env
-```
-
-If you do not have Miniconda or Anaconda, install Miniconda first from:  
-https://docs.conda.io/en/latest/miniconda.html
+- **Inputs**: Parquet/CSV/TSV tables or HATS/LSDB catalogs (`input.format`).
+- **HiPS depth control**:
+  - `level_limit`: maximum HiPS order to write.
+  - `level_coverage`: order used for the MOC and global coverage.
+  - `coverage_order`: order for coverage cells (`__icov__`).
+- **Parallelism**: full Dask-based execution, with cluster configuration under `cluster:`.
+- **Outputs**:
+  - Per-depth tiles (`Norder*/Dir*/Npix*.tsv`).
+  - All-sky files (`Allsky.tsv`).
+  - Density maps (`densmap_o<depth>.fits`).
+  - Coverage maps (`Moc.fits`, `Moc.json`).
+  - Metadata descriptors (`properties`, `metadata.xml`).
+- **Reproducibility**:
+  - Automatic log files, `arguments`, and YAML config snapshots.
 
 ---
-## 4. Adjust configuration
 
-Edit `config.yaml` to match your environment and data paths.
+## 2. Coverage-Based Mode (`selection_mode: coverage`)
 
-**Key points:**
-- Set the input and output directories.
-- Choose the cluster mode: `local` (LocalCluster) or `slurm` (SLURMCluster).
-- Adjust the number of workers, memory, and parallelization settings.
-- Optionally modify algorithm parameters such as `level_limit`, `coverage_order`, and `fractional_mode`.
-- Choose the input format:
-  - `parquet`, `csv`, or `tsv` for standard flat files.
-  - `hats` when reading a HATS/LSDB catalog with `lsdb` (in this case, `input.paths` must resolve to exactly one catalog).
+This mode performs selection based on coverage cells (`__icov__`), applying density laws and optional fractional randomization.
 
-Example configuration files are provided in the repository.
+### Parameters (exclusive to coverage mode)
 
-### Using HATS / LSDB catalogs as input
+- **Coverage partitioning**
+  - `use_hats_as_coverage`: use HATS partitions instead of HEALPix cells (for HATS input only).
+  - `coverage_order`: HEALPix order for coverage cells.
 
-To use a HATS/LSDB catalog as input, set:
+- **Score ordering**
+  - `order_desc`:
+    - `false` → ascending (lower score is better).
+    - `true` → descending (higher score is better).
 
-```yaml
-input:
-  paths:
-    - "/path/to/catalog.hats"   # must resolve to exactly one catalog
-  format: hats
-```
+- **Density scaling**
+  - `density_mode`: `"constant"`, `"linear"`, `"exp"`, or `"log"`.
+  - `k_per_cov_initial`: expected rows per coverage cell at depth 1.
+  - `targets_total_initial`: alternative to `k_per_cov_initial`.
+  - `density_exp_base`: exponential growth base when `density_mode: exp`.
 
-Notes:
+- **Biasing**
+  - `density_bias_mode`: `"none"`, `"proportional"`, or `"inverse"`.
+  - `density_bias_exponent`: power-law exponent controlling bias strength.
 
-- The pipeline internally uses `lsdb.open_catalog(...)` and keeps a native `lsdb.catalog.Catalog` instead of a plain Dask DataFrame.
-- If the catalog index is a nested HEALPix index named like `_healpix_<order>`, the pipeline:
-  - Derives coverage cells (`__icov__`) by bit-shifting from the index to `coverage_order`.
-  - Builds density maps directly from the index when possible, avoiding recomputing HEALPix indices from RA/DEC.
-- All high-level selection logic (density profile, fractional selection, per-depth tiles, MOC, metadata) remains the same as for Parquet/CSV/TSV inputs.
+- **Overrides**
+  - `k_per_cov_per_level`: manual overrides of `k_per_cov` per depth.
+  - `targets_total_per_level`: global caps for total number of sources per depth.
+
+- **Fractional sampling**
+  - `fractional_mode`: `"random"` or `"score"`.
+  - `fractional_mode_logic`: `"local"` or `"global"`.
+  - `tie_buffer`: extra candidates per coverage cell to mitigate score ties.
+
+### When to use
+
+- When you want uniform spatial coverage and density-balanced sampling.
+- When selection is driven by positional density or ranking scores.
+- When you want hierarchical downsampling per HiPS order.
 
 ---
-## 5. Run the pipeline
 
-Execute the main script directly:
+## 3. Global Magnitude-Complete Mode (`selection_mode: mag_global`)
 
-```bash
-python Hipsgen-cat.py --config config.yaml
+This mode ensures a magnitude-complete catalog by analyzing the full magnitude distribution before per-depth selection.
+
+### Parameters (exclusive to mag_global mode)
+
+- **Magnitude column**
+  - `mag_column`: column name used for global ordering and histogram.
+
+- **Magnitude range**
+  - `mag_min` / `mag_max`: brightness limits for completeness.
+    - If omitted:
+      - `mag_min` = lowest magnitude in the dataset.
+      - `mag_max` = **mode (peak)** of the global magnitude histogram.
+
+- **Histogram and quantiles**
+  - `mag_hist_nbins`: number of bins used for global histogram (controls quantile precision).
+
+- **Global targets**
+  - `n_1`, `n_2`, `n_3`: optional approximate total target counts per depth.  
+    Must be provided cumulatively (e.g. `n_2` requires `n_1`).
+
+### When to use
+
+- When you want **photometric completeness** rather than spatial uniformity.
+- When you aim for consistent magnitude limits across depths.
+- When physical brightness is the main selection variable.
+
+---
+
+## 4. Running the Pipeline
+
+### Option 1 — As a library
+
+```python
+from hipsgen_cat import load_config, run_pipeline
+
+cfg = load_config("config.yaml")
+run_pipeline(cfg)
 ```
 
-The pipeline will:
-1. Read all input files and build HEALPix-based density maps for each HiPS depth.  
-2. Generate a coverage MOC (`Moc.fits` and `Moc.json`) using `level_coverage`.  
-3. Perform per-depth source selection according to uniform coverage and density profiles.  
-4. Write hierarchical HiPS directories with completeness headers and metadata.  
-5. Save process logs, arguments, and configuration snapshots in the output directory.
+### Option 2 — From the command line
 
-When `input.format: hats` is used, the same steps apply, but some operations (such as coverage indexing and density maps) reuse the HEALPix index from the HATS catalog for better performance and consistency.
+```bash
+python -m hipsgen_cat.cli --config config.yaml
+```
 
-### Running on the LIneA HPC Cluster (Apollo)
+### Option 3 — On the LIneA Apollo cluster (SLURM)
 
-If you are running this pipeline on the **LIneA HPC cluster (Apollo)**, you can submit it using **SLURM** instead of running it directly in the terminal.  
-This ensures that the process continues even if your session is closed.
-
-A template job submission script (`run_hips.sbatch`) is provided in this repository.  
-It already includes typical SLURM directives, resource requests, and environment activation steps.  
-Before running, make sure to:
-
-- Adjust the paths to your Conda environment and pipeline directory.  
-- Check the `--partition` and `--account` directives to match your available resources.  
-  If you do not have access to the default account (`hpc-bpglsst`), use another one you are authorized for.  
-  See the Apollo documentation for more details:  
-  https://docs.linea.org.br/processamento/apollo/index.html
-
-Submit the job with:
+Submit via SLURM job script:
 
 ```bash
 sbatch run_hips.sbatch
 ```
 
-You can then monitor its progress with:
+Monitor progress:
 
 ```bash
 squeue -u $USER
 ```
 
 ---
-## Acknowledgment
+
+## 5. Output Structure
+
+Each HiPS order (`NorderX`) includes:
+- `Dir*/Npix*.tsv`: per-cell tiles with completeness headers.
+- `Allsky.tsv`: all-sky view for that order.
+- `densmap_o<depth>.fits`: density maps (depth < 13).
+- `Moc.fits`, `Moc.json`: coverage maps.
+- `metadata.xml`, `properties`: HiPS metadata descriptors.
+- `arguments`, logs, and config snapshots for reproducibility.
+
+---
+
+## 6. Mode Comparison
+
+| Feature | Coverage Mode | Mag_Global Mode |
+|----------|----------------|----------------|
+| Partition basis | HEALPix or HATS cells | Global (no spatial partition) |
+| Main selection variable | Score / density | Magnitude |
+| Completeness goal | Uniform sky density | Photometric completeness |
+| Adaptive with depth | Yes (density laws) | Yes (global quantiles) |
+| Parameters | `k_per_cov`, `density_mode`, `fractional_mode` | `mag_column`, `mag_min/max`, `n_1/n_2/n_3` |
+| Typical use | Uniform sampling | Brightness-limited sampling |
+
+---
+
+## 7. Acknowledgment
+
 This work was inspired by the HiPS Catalog tools developed at the CDS,  
 whose design and public documentation provided valuable guidance for this independent reimplementation.
 

@@ -11,7 +11,8 @@
 # =============================================================================
 # HiPS Catalog Pipeline — SLURM submission script
 # -----------------------------------------------------------------------------
-# This template runs the HiPS catalog generation pipeline on LIneA’s Apollo cluster.
+# This template runs the HiPS catalog generation pipeline on LIneA’s Apollo cluster,
+# using the modular hipsgen_cat package.
 #
 # Before submitting, make sure to:
 #   1) Adjust the 'partition' (--partition) and 'account' (--account) directives
@@ -32,11 +33,11 @@ source /scripts/$USER/hipsgencat_env/bin/activate
 # -----------------------------------------------------------------------------
 # 2. Go to the pipeline directory
 # -----------------------------------------------------------------------------
-# Replace with the directory where Hipsgen-cat.py is located.
+# This directory must contain the 'hipsgen_cat/' package and your config file.
 cd /scripts/$USER/sky-viewer/docs/hipsgen_python_parallelized
 
 # -----------------------------------------------------------------------------
-# 3. Run the HiPS Catalog Pipeline
+# 3. Run the HiPS Catalog Pipeline (modular package)
 # -----------------------------------------------------------------------------
-# Adjust the path and name of the configuration file as needed.
-python Hipsgen-cat.py --config config.yaml
+# Adjust the configuration file name/path as needed.
+python -m hipsgen_cat.cli --config config.yaml

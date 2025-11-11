@@ -248,6 +248,11 @@ def run_pipeline(cfg: Config) -> None:
             # Global magnitude-selection path:
             #   * No coverage (__icov__) needed for the selection itself.
             #   * Keep numeric magnitude column in __mag__.
+            #   * If mag_min is not provided, use the global minimum magnitude,
+            #     but not smaller than -2 (to avoid extreme outliers).
+            #   * If mag_max is not provided, estimate it from the histogram
+            #     peak (bin center of the highest-count bin, rounded to 0.01)
+            #     using a histogram restricted to mag < 40.
             #   * Restrict working catalog to [mag_min, mag_max].
             # --------------------------------------------------------------
             mag_col_cfg = getattr(algo, "mag_column", None)
@@ -260,19 +265,6 @@ def run_pipeline(cfg: Config) -> None:
             if mag_col_cfg not in ddf.columns:
                 raise KeyError(
                     f"Configured mag_column '{mag_col_cfg}' not found in input columns."
-                )
-
-            if algo.mag_min is None or algo.mag_max is None:
-                raise ValueError(
-                    "algorithm.selection_mode='mag_global' requires both "
-                    "algorithm.mag_min and algorithm.mag_max to be defined."
-                )
-            mag_min = float(algo.mag_min)
-            mag_max = float(algo.mag_max)
-            if mag_min >= mag_max:
-                raise ValueError(
-                    f"algorithm.mag_min ({mag_min}) must be strictly smaller than "
-                    f"algorithm.mag_max ({mag_max}) for mag_global selection."
                 )
 
             # Numeric magnitude column kept in internal __mag__ field.
@@ -295,6 +287,121 @@ def run_pipeline(cfg: Config) -> None:
                 meta=meta_with_mag,
             )
 
+            mag_col_internal = "__mag__"
+            mag_min_cfg = getattr(algo, "mag_min", None)
+            mag_max_cfg = getattr(algo, "mag_max", None)
+
+            # Determine global min/max in __mag__ for automatic bounds.
+            with diag_ctx("dask_mag_minmax"):
+                mag_min_global_raw, mag_max_global_raw = dask_compute(
+                    ddf[mag_col_internal].min(),
+                    ddf[mag_col_internal].max(),
+                )
+
+            if mag_min_global_raw is None or mag_max_global_raw is None:
+                raise ValueError(
+                    "mag_global selection: unable to determine global magnitude "
+                    "range (min/max returned None). Check the magnitude column."
+                )
+
+            mag_min_global_raw = float(mag_min_global_raw)
+            mag_max_global_raw = float(mag_max_global_raw)
+
+            if not np.isfinite(mag_min_global_raw) or not np.isfinite(mag_max_global_raw):
+                raise ValueError(
+                    "mag_global selection: global magnitude min/max are not finite. "
+                    "Check the magnitude column values."
+                )
+
+            if mag_min_global_raw >= mag_max_global_raw:
+                raise ValueError(
+                    f"mag_global selection: invalid global magnitude range "
+                    f"[{mag_min_global_raw}, {mag_max_global_raw}]."
+                )
+
+            # ------------------------------------------------------------------
+            # Effective mag_min (automatic mode: clip to >= -2)
+            # ------------------------------------------------------------------
+            if mag_min_cfg is None:
+                raw = mag_min_global_raw
+                mag_min = max(raw, -2.0)
+                if mag_min != raw:
+                    _log(
+                        "[mag_global] mag_min not provided; using global minimum "
+                        f"{raw:.4f} clipped to {mag_min:.4f} (>= -2).",
+                        always=True,
+                    )
+                else:
+                    _log(
+                        "[mag_global] mag_min not provided; using global minimum "
+                        f"magnitude {mag_min:.4f}.",
+                        always=True,
+                    )
+            else:
+                mag_min = float(mag_min_cfg)
+
+            # Upper bound used for automatic histogram range (to avoid high outliers).
+            mag_upper_for_hist = min(mag_max_global_raw, 40.0)
+
+            if mag_upper_for_hist <= mag_min:
+                raise ValueError(
+                    "mag_global selection: after applying automatic bounds, "
+                    f"mag_min={mag_min:.4f} is not smaller than the upper histogram "
+                    f"limit={mag_upper_for_hist:.4f}. Check magnitude values or "
+                    "configured mag_min."
+                )
+
+            # ------------------------------------------------------------------
+            # Effective mag_max (automatic mode: histogram peak, mag <= 40)
+            # ------------------------------------------------------------------
+            if mag_max_cfg is None:
+                # Use a preliminary histogram in [mag_min, mag_upper_for_hist]
+                # to estimate the peak and define mag_max as the corresponding
+                # bin center (rounded to 0.01).
+                with diag_ctx("dask_mag_hist_auto_max"):
+                    hist_auto, edges_auto, n_tot_auto = compute_mag_histogram_ddf(
+                        ddf_like=ddf,
+                        mag_col=mag_col_internal,
+                        mag_min=mag_min,
+                        mag_max=mag_upper_for_hist,
+                        nbins=algo.mag_hist_nbins,
+                    )
+
+                if n_tot_auto == 0:
+                    raise ValueError(
+                        "mag_global selection: no objects found when estimating "
+                        "automatic mag_max. Check the magnitude column and range."
+                    )
+
+                peak_idx = int(np.argmax(hist_auto))
+                bin_left = float(edges_auto[peak_idx])
+                bin_right = float(edges_auto[peak_idx + 1])
+                peak_center = 0.5 * (bin_left + bin_right)
+
+                # Enforce the <= 40 constraint implicitly via mag_upper_for_hist.
+                peak_center = min(peak_center, mag_upper_for_hist)
+                mag_max = float(np.round(peak_center, 2))
+
+                _log(
+                    "[mag_global] mag_max not provided; using histogram peak at "
+                    f"{mag_max:.2f} (bin center from [{bin_left:.4f}, "
+                    f"{bin_right:.4f}], with mag < 40).",
+                    always=True,
+                )
+            else:
+                mag_max = float(mag_max_cfg)
+
+            if mag_min >= mag_max:
+                raise ValueError(
+                    f"algorithm.mag_min ({mag_min}) must be strictly smaller than "
+                    f"algorithm.mag_max ({mag_max}) for mag_global selection."
+                )
+
+            # Store effective values back in the config object so that they are
+            # echoed consistently in arguments and logs.
+            algo.mag_min = mag_min
+            algo.mag_max = mag_max
+
             # Restrict to [mag_min, mag_max] once; all depths use the same pool.
             meta_sel = meta_with_mag.copy()
 
@@ -306,7 +413,7 @@ def run_pipeline(cfg: Config) -> None:
                 """Keep only rows with __mag__ in [mag_min_val, mag_max_val]."""
                 if pdf.empty:
                     return pdf
-                m = pd.to_numeric(pdf["__mag__"], errors="coerce")
+                m = pd.to_numeric(pdf[mag_col_internal], errors="coerce")
                 mask = (m >= mag_min_val) & (m <= mag_max_val)
                 return pdf.loc[mask]
 
