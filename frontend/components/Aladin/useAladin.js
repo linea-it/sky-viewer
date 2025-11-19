@@ -38,6 +38,19 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
       },
       requireGroup: 'lsst_dp0.2', // Grupo necessário para acesso
     },
+    // Adiciona imagem do LSST DP1 (privada, requer grupo 'lsst_dp1')
+    {
+      id: "LSST_DP1_IRG_LIneA",
+      name: "LSST DP1 IRG at LIneA",
+      url: `${baseHost}/data/releases/lsst/dp1/images/hips`,
+      cooFrame: "equatorial",
+      options: {
+        requestCredentials: 'include',
+        requestMode: 'cors',
+      },
+      requireGroup: 'lsst_dp1', // Grupo necessário para acesso
+      devOnly: true,
+    },
     // Rubin First Look (pública)
     {
       id: "RUBIN_FIRST_LOOK_UGRI",
@@ -59,12 +72,24 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
     {
       id: 'des_dr2_teste',
       name: 'DES DR2 SAMPLE TEST',
-      url: 'https://skyviewer-dev.linea.org.br/data/DES_DR2_small_sample/',
+      url: `${baseHost}/data/releases/des/dr2/images/hips/`,
       options: {
         color: '#2BC7EE',
         requestCredentials: 'include',
         requestMode: 'cors',
       },
+      devOnly: true,
+    },
+    {
+      id: 'lsst_dp1_teste',
+      name: 'LSST DP1 SAMPLE TEST',
+      url: `${baseHost}/data/releases/lsst/dp1/catalogs/hips`,
+      options: {
+        color: '#2BC7EE',
+        requestCredentials: 'include',
+        requestMode: 'cors',
+      },
+      requireGroup: 'lsst_dp1',
       devOnly: true,
     },
     // // Adiciona catálogo LSST DP0.2 (privado)
@@ -101,7 +126,8 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
   const defaultTargets = {
     "DES_DR2_IRG_LIneA": "02 32 44.09 -35 57 39.5",
     "RUBIN_FIRST_LOOK_UGRI": "12 26 53.27 +08 56 49.0",
-    "LSST_DP02_IRG_LIneA": "04 08 29.07 -37 02 47.9"
+    "LSST_DP02_IRG_LIneA": "04 08 29.07 -37 02 47.9",
+    "LSST_DP1_IRG_LIneA": "02 39 35.55 -34 30 38.3",
   }
 
   useEffect(() => {

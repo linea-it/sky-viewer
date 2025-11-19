@@ -1,0 +1,36 @@
+FROM nginx:alpine
+
+# Instalar dependências para manipulação de usuários/grupos
+RUN apk add --no-cache shadow
+
+# Criar grupos existentes no host e adicionar usuário nginx a eles
+RUN groupadd -g 10006 deployer && \ 
+    groupadd -g 15050 lsst_dp1 && \
+    groupadd -g 39215 des && \
+    groupadd -g 39216 lsst
+
+# Adicionar usuário nginx a todos os grupos
+RUN usermod -a -G deployer,lsst_dp1,des,lsst nginx
+
+# Ajustar permissões dos diretórios do nginx para o usuário nginx
+RUN chown -R nginx:nginx /var/cache/nginx && \
+    chown -R nginx:nginx /var/run && \
+    chown -R nginx:nginx /etc/nginx && \
+    chown -R nginx:nginx /usr/share/nginx/html && \
+    chown -R nginx:nginx /run && \
+    mkdir -p /tmp/nginx_cache && \
+    chown -R nginx:nginx /tmp/nginx_cache
+
+# Mudar PID file location para um diretório com permissão
+RUN sed -i 's|pid /run/nginx.pid;|pid /tmp/nginx.pid;|g' /etc/nginx/nginx.conf
+
+# Mudar para porta alta no container (usuário não-root pode bindar)
+RUN sed -i 's/listen\(.*\)80;/listen 8080;/g' /etc/nginx/conf.d/default.conf
+
+# Switch para usuário nginx
+USER nginx
+
+# Expor porta
+EXPOSE 8080
+
+CMD ["nginx", "-g", "daemon off;"]

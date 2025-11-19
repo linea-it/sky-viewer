@@ -26,13 +26,24 @@ services:
       - ./data/redis:/data
 
   nginx:
-    image: nginx:latest
+    image: nginxinc/nginx-unprivileged:latest
+    group_add:
+      - "10006"
+      - "39215"
+      - "15050"
+      - "39216"
     ports:
-      - ${WEB_PORT:-8087}:80
+      - ${WEB_PORT:-8087}:8080
     volumes:
       # Arquivo de configuração do Ngnix para este amente
       - ./nginx-proxy.conf:/etc/nginx/conf.d/default.conf:ro
       # Diretório onde o backend manipula arquivos, e que deve ficar acessivel ao servidor web.
-      - ./data/tmp:/var/www/data
+      - ./data/tmp:/var/www/data:ro
       # LSST DP02 Hips Images (PRIVATE)
-      - /mnt/cl/lsst/dp02/secondary/images/hips:/var/www/data/releases/lsst/dp02/images/hips
+      - /mnt/cl/lsst/dp02/secondary/images/hips:/var/www/data/releases/lsst/dp02/images/hips:ro
+      # LSST DP1 Hips Images (PRIVATE)
+      - /mnt/cl/lsst/dp1/secondary/images/hips:/var/www/data/releases/lsst/dp1/images/hips:ro
+      - /mnt/cl/lsst/dp1/hipscatalogs/dp1_from_python/LSST_DP1:/var/www/data/releases/lsst/dp1/catalogs/hips:ro
+    depends_on:
+      - backend
+      - frontend
