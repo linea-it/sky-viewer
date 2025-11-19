@@ -81,4 +81,10 @@ def nginx_serve_protected_hips(request):
             logger.warning(f"User {request.user.username} does not have access to DP02 HIPS images.")
             return HttpResponseForbidden({"message":"User does not have access to DP02 HIPS images."}, content_type="application/json", status=403)
     
+    if original_uri.find('/lsst/dp1/') > -1:
+        # Check if the user has the required group membership for HIPS images
+        if not request.user.groups.filter(name='lsst_dp1').exists():
+            logger.warning(f"User {request.user.username} does not have access to DP1 HIPS images.")
+            return HttpResponseForbidden({"message":"User does not have access to DP1 HIPS images."}, content_type="application/json", status=403)
+        
     return HttpResponse({}, content_type="application/json", status=200)
