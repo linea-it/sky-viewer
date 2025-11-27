@@ -94,10 +94,10 @@ export default function Header() {
 
           <Box sx={{ flexGrow: 1 }} />
 
-          <Button href="https://data.linea.org.br/" color="inherit" variant="outlined" sx={{ mr: 2 }} size="small">
+          <Button href="https://data.linea.org.br/" target="_blank" color="inherit" variant="outlined" sx={{ mr: 2 }} size="small">
             Data
           </Button>
-          <Button href="https://docs.linea.org.br/" color="inherit" variant="outlined" size="small" sx={{ mr: 4 }}>
+          <Button href="https://docs.linea.org.br/" target="_blank" color="inherit" variant="outlined" size="small" sx={{ mr: 4 }}>
             Docs
           </Button>
 

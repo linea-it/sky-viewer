@@ -49,7 +49,7 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
         requestMode: 'cors',
       },
       requireGroup: 'lsst_dp1', // Grupo necessário para acesso
-      devOnly: true,
+      devOnly: false,
     },
     // Rubin First Look (pública)
     {
@@ -81,8 +81,8 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
       devOnly: true,
     },
     {
-      id: 'lsst_dp1_teste',
-      name: 'LSST DP1 SAMPLE TEST',
+      id: 'lsst_dp1',
+      name: 'LSST DP1',
       url: `${baseHost}/data/releases/lsst/dp1/catalogs/hips`,
       options: {
         color: '#2BC7EE',
@@ -90,7 +90,7 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
         requestMode: 'cors',
       },
       requireGroup: 'lsst_dp1',
-      devOnly: true,
+      devOnly: false,
     },
     // // Adiciona catálogo LSST DP0.2 (privado)
     // {
