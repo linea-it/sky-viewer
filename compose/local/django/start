@@ -11,7 +11,7 @@ echo "Running Collect Statics"
 python manage.py collectstatic --clear --noinput --verbosity 0
 
 echo "Running Django Compress"
-python manage.py compress
+# python manage.py compress
 
 # uWSGI para servir o app e ter compatibilidade com Shibboleth
 # https://uwsgi-docs.readthedocs.io/en/latest/WSGIquickstart.html

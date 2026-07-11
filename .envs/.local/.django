@@ -6,6 +6,7 @@ IPYTHONDIR=/app/.ipython
 DJANGO_DEBUG=True
 DJANGO_SECRET_KEY=hIIbCQezMLys5Ya2Flyx2NDdrs4ZG6DA2pLDu8kKPgtjP7xx6D1m8yccSD6zX6Br
 DATABASE_URL=postgres://debug:debug@postgres:5432/sky_viewer
+DJANGO_SETTINGS_MODULE=config.settings.local
 
 # UWSGI
 DJANGO_UWSGI_WORKER_PROCESSES=1
