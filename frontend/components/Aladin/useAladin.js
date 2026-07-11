@@ -134,6 +134,8 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
     {
       surveyKey: 'des_dr2', // layer name do overlay: `map-des_dr2`
       name: 'DES DR2',
+      // TODO: o properties destes mapas declara hips_frame=galactic e a imagem fica
+      // desalinhada com o survey - provável problema na geração do HiPS no servidor
       cooFrame: "equatorial",
       categories: [
         {
@@ -315,7 +317,7 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
 
   // Aplica/substitui o overlay de mapa do survey; sempre torna o mapa visível.
   // Mesmo comportamento do botão "+ Surveys" nativo: adiciona uma nova layer de imagem
-  const setMapOverlay = useCallback((surveyKey, mapId, opacity = 1.0) => {
+  const setMapOverlay = useCallback((surveyKey, mapId, opacity = 0.8) => {
     if (!aladinRef.current) return;
     const hips_map = mapSurveysRef.current[surveyKey]?.[mapId];
     if (!hips_map) return;
@@ -338,6 +340,14 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
     if (!layer) return;
     layer.visible = visible;
     layer.hips.setOpacity(visible ? layer.opacity : 0);
+  }, []);
+
+  // Remove a layer de mapa do survey (equivalente ao botão de lixeira do Aladin)
+  const removeMapOverlay = useCallback((surveyKey) => {
+    if (!aladinRef.current) return;
+    if (!mapLayersRef.current[surveyKey]) return;
+    aladinRef.current.removeImageLayer(`map-${surveyKey}`);
+    delete mapLayersRef.current[surveyKey];
   }, []);
 
   const addMarker = useCallback((ra, dec, options = {}) => {
@@ -365,5 +375,6 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
     setMapOverlay,
     setMapOpacity,
     setMapVisibility,
+    removeMapOverlay,
   };
 }

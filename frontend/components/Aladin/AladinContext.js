@@ -21,6 +21,7 @@ export const AladinContext = createContext({
   setMapOverlay: () => { },
   setMapOpacity: () => { },
   setMapVisibility: () => { },
+  removeMapOverlay: () => { },
 });
 
 /**

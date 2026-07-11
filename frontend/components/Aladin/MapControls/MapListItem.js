@@ -1,6 +1,5 @@
 import React from 'react';
 import PropTypes from 'prop-types'
-import Checkbox from '@mui/material/Checkbox';
 import Collapse from '@mui/material/Collapse';
 import ListItem from '@mui/material/ListItem';
 import ListItemButton from '@mui/material/ListItemButton';
@@ -9,20 +8,25 @@ import ListItemText from '@mui/material/ListItemText';
 import Divider from '@mui/material/Divider';
 import ExpandLess from '@mui/icons-material/ExpandLess';
 import ExpandMore from '@mui/icons-material/ExpandMore';
+import Visibility from '@mui/icons-material/Visibility';
+import VisibilityOff from '@mui/icons-material/VisibilityOff';
+import DeleteIcon from '@mui/icons-material/Delete';
 import IconButton from '@mui/material/IconButton';
 import Stack from '@mui/material/Stack';
 import { useAladinContext } from '@/components/Aladin/AladinContext';
 import MapSelect from './MapSelect';
 import OpacitySlider from './OpacitySlider';
 
+const DEFAULT_OPACITY = 0.8;
+
 export default function MapListItem({ mapGroup }) {
 
-  const { setMapOverlay, setMapOpacity, setMapVisibility } = useAladinContext();
+  const { setMapOverlay, setMapOpacity, setMapVisibility, removeMapOverlay } = useAladinContext();
 
   const [open, setOpen] = React.useState(false);
-  const [checked, setChecked] = React.useState(false);
+  const [visible, setVisible] = React.useState(false);
   const [mapId, setMapId] = React.useState('');
-  const [opacity, setOpacity] = React.useState(1.0);
+  const [opacity, setOpacity] = React.useState(DEFAULT_OPACITY);
 
   const options = React.useMemo(() =>
     mapGroup.categories.flatMap(cat =>
@@ -38,8 +42,8 @@ export default function MapListItem({ mapGroup }) {
       setOpen(true);
       return;
     }
-    setMapVisibility(mapGroup.surveyKey, !checked);
-    setChecked(!checked);
+    setMapVisibility(mapGroup.surveyKey, !visible);
+    setVisible(!visible);
   };
 
   const handleExtend = () => {
@@ -49,7 +53,7 @@ export default function MapListItem({ mapGroup }) {
   const handleMapChange = (value) => {
     setMapId(value);
     setMapOverlay(mapGroup.surveyKey, value, opacity);
-    setChecked(true);
+    setVisible(true);
   };
 
   const handleOpacityChange = (value) => {
@@ -57,25 +61,32 @@ export default function MapListItem({ mapGroup }) {
     setMapOpacity(mapGroup.surveyKey, value);
   };
 
+  const handleRemove = () => {
+    removeMapOverlay(mapGroup.surveyKey);
+    setMapId('');
+    setVisible(false);
+    setOpacity(DEFAULT_OPACITY);
+  };
+
   return (
     <React.Fragment>
       <ListItem
         key={`map-option-${mapGroup.surveyKey}`}
         secondaryAction={
-          <IconButton edge="end" aria-label="expand" onClick={handleExtend}>
-            {open ? <ExpandLess /> : <ExpandMore />}
-          </IconButton>
+          <React.Fragment>
+            <IconButton aria-label="remove" onClick={handleRemove} disabled={!mapId}>
+              <DeleteIcon />
+            </IconButton>
+            <IconButton edge="end" aria-label="expand" onClick={handleExtend}>
+              {open ? <ExpandLess /> : <ExpandMore />}
+            </IconButton>
+          </React.Fragment>
         }
         disablePadding
       >
         <ListItemButton onClick={handleToggle}>
           <ListItemIcon>
-            <Checkbox
-              edge="start"
-              checked={checked}
-              tabIndex={-1}
-              disableRipple
-            />
+            {visible ? <Visibility /> : <VisibilityOff />}
           </ListItemIcon>
           <ListItemText primary={mapGroup.name} />
         </ListItemButton>
