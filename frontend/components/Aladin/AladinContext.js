@@ -17,6 +17,11 @@ export const AladinContext = createContext({
   setImageSurvey: () => { },
   toggleCatalogVisibility: () => { },
   addMarker: () => { },
+  mapsList: [],
+  setMapOverlay: () => { },
+  setMapOpacity: () => { },
+  setMapVisibility: () => { },
+  removeMapOverlay: () => { },
 });
 
 /**

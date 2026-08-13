@@ -4,6 +4,7 @@ import Stack from '@mui/material/Stack';
 import Divider from '@mui/material/Divider';
 import SurveyControls from '@/components/Aladin/SurveyControls';
 import CatalogControls from '@/components/Aladin/CatalogControls';
+import MapControls from '@/components/Aladin/MapControls';
 
 export default function Controls() {
 
@@ -12,6 +13,8 @@ export default function Controls() {
             <SurveyControls />
             <Divider />
             <CatalogControls />
+            <Divider />
+            <MapControls />
         </Stack>
 
     );
