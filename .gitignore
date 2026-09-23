@@ -130,6 +130,8 @@ typings/
 
 # Output of 'npm pack'
 *.tgz
+# Custom aladin-lite build required by the frontend Docker build
+!frontend/aladin-lite-3.7.0-beta.tgz
 
 # Yarn Integrity file
 .yarn-integrity
