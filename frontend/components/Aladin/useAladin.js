@@ -54,6 +54,19 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
       requireGroup: 'lsst_dp1', // Grupo necessário para acesso
       devOnly: false,
     },
+    // Adiciona imagem do LSST DP2 (privada, requer grupo 'lsst_dp2')
+    {
+      id: "LSST_DP2_IRG_LIneA",
+      name: "LSST DP2 IRG at LIneA",
+      url: `${baseHost}/data/releases/lsst/dp2/images/hips`,
+      cooFrame: "equatorial",
+      options: {
+        requestCredentials: 'include',
+        requestMode: 'cors',
+      },
+      requireGroup: 'lsst_dp2', // Grupo necessário para acesso
+      devOnly: false,
+    },
     // Rubin First Look (pública)
     {
       id: "RUBIN_FIRST_LOOK_UGRI",
@@ -93,6 +106,18 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
         requestMode: 'cors',
       },
       requireGroup: 'lsst_dp1',
+      devOnly: false,
+    },
+    {
+      id: 'lsst_dp2',
+      name: 'LSST DP2',
+      url: `${baseHost}/data/releases/lsst/dp2/catalogs/hips`,
+      options: {
+        color: '#F5A623',
+        requestCredentials: 'include',
+        requestMode: 'cors',
+      },
+      requireGroup: 'lsst_dp2',
       devOnly: false,
     },
     // // Adiciona catálogo LSST DP0.2 (privado)
@@ -165,6 +190,7 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
     "RUBIN_FIRST_LOOK_UGRI": "12 26 53.27 +08 56 49.0",
     "LSST_DP02_IRG_LIneA": "04 08 29.07 -37 02 47.9",
     "LSST_DP1_IRG_LIneA": "02 39 35.55 -34 30 38.3",
+    "LSST_DP2_IRG_LIneA": "02 39 35.55 -34 30 38.3",
   }
 
   useEffect(() => {

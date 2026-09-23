@@ -32,6 +32,7 @@ services:
       - "39215"
       - "15050"
       - "39216"
+      - "15052"
     ports:
       - ${WEB_PORT:-8087}:8080
     volumes:
@@ -43,7 +44,10 @@ services:
       - /mnt/cl/lsst/dp02/secondary/images/hips:/var/www/data/releases/lsst/dp02/images/hips:ro
       # LSST DP1 Hips Images (PRIVATE)
       - /mnt/cl/lsst/dp1/secondary/images/hips:/var/www/data/releases/lsst/dp1/images/hips:ro
-      - /mnt/cl/lsst/dp1/hipscatalogs/dp1_from_python/LSST_DP1:/var/www/data/releases/lsst/dp1/catalogs/hips:ro
+      - /mnt/cl/lsst/dp1/secondary/catalogs/hips:/var/www/data/releases/lsst/dp1/catalogs/hips:ro
+      # LSST DP2 Hips Images (PRIVATE)
+      - /mnt/cl/lsst/dp2/secondary/images/hips:/var/www/data/releases/lsst/dp2/images/hips:ro
+      - /mnt/cl/lsst/dp2/secondary/catalogs/hips:/var/www/data/releases/lsst/dp2/catalogs/hips:ro
     depends_on:
       - backend
       - frontend

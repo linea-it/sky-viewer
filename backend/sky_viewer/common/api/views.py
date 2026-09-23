@@ -1,15 +1,16 @@
+import logging
+
 from django.conf import settings
 from django.contrib.auth import logout
+from django.http import HttpResponse
+from django.http import HttpResponseForbidden
+from django.views.decorators.csrf import csrf_exempt
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.decorators import permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
-from django.contrib.auth.decorators import login_required
-from django.http import HttpResponse, HttpResponseForbidden
-from django.views.decorators.csrf import csrf_exempt
 
-import logging
 
 @api_view(["GET"])
 def teste(request):
@@ -54,37 +55,68 @@ def nginx_serve_protected_hips(request):
     logger.info("nginx_serve_protected_hips_debug()")
 
     data = {
-        'X-Original-URI': request.META.get('HTTP_X_ORIGINAL_URI'),
-        'Cookie': request.META.get('HTTP_COOKIE'),
-        'Path': request.path,
-        'Method': request.method,
-        'META': {k: v for k, v in request.META.items() if k.startswith('HTTP_')},
+        "X-Original-URI": request.headers.get("x-original-uri"),
+        "Cookie": request.headers.get("cookie"),
+        "Path": request.path,
+        "Method": request.method,
+        "META": {k: v for k, v in request.META.items() if k.startswith("HTTP_")},
     }
 
     logger.debug(data)
 
-    original_uri = request.META.get('HTTP_X_ORIGINAL_URI')
-    if original_uri.endswith('/properties') or original_uri.endswith('/Moc.fits'):
+    original_uri = request.headers.get("x-original-uri")
+    if original_uri.endswith(("/properties", "/Moc.fits")):
         logger.info("Request for properties, temporary always return 200.")
         return HttpResponse({}, content_type="application/json", status=200)
-    
+
     if not request.user.is_authenticated:
         logger.warning("User is not authenticated, returning 403 Forbidden.")
-        return HttpResponseForbidden({"message":"User is not authenticated."}, content_type="application/json", status=403)
-    
-    logger.info(f"User is authenticated: {request.user.username}")
+        return HttpResponseForbidden(
+            {"message": "User is not authenticated."},
+            content_type="application/json",
+            status=403,
+        )
+
+    logger.info("User is authenticated: %s", request.user.username)
 
     # Identifie release from the original URI
-    if original_uri.find('/lsst/dp02/') > -1:
+    if original_uri.find("/lsst/dp02/") > -1:
         # Check if the user has the required group membership for HIPS images
-        if not request.user.groups.filter(name='lsst_dp0.2').exists():
-            logger.warning(f"User {request.user.username} does not have access to DP02 HIPS images.")
-            return HttpResponseForbidden({"message":"User does not have access to DP02 HIPS images."}, content_type="application/json", status=403)
-    
-    if original_uri.find('/lsst/dp1/') > -1:
+        if not request.user.groups.filter(name="lsst_dp0.2").exists():
+            logger.warning(
+                "User %s does not have access to DP02 HIPS images.",
+                request.user.username,
+            )
+            return HttpResponseForbidden(
+                {"message": "User does not have access to DP02 HIPS images."},
+                content_type="application/json",
+                status=403,
+            )
+
+    if original_uri.find("/lsst/dp1/") > -1:
         # Check if the user has the required group membership for HIPS images
-        if not request.user.groups.filter(name='lsst_dp1').exists():
-            logger.warning(f"User {request.user.username} does not have access to DP1 HIPS images.")
-            return HttpResponseForbidden({"message":"User does not have access to DP1 HIPS images."}, content_type="application/json", status=403)
-        
+        if not request.user.groups.filter(name="lsst_dp1").exists():
+            logger.warning(
+                "User %s does not have access to DP1 HIPS images.",
+                request.user.username,
+            )
+            return HttpResponseForbidden(
+                {"message": "User does not have access to DP1 HIPS images."},
+                content_type="application/json",
+                status=403,
+            )
+
+    if original_uri.find("/lsst/dp2/") > -1:
+        # Check if the user has the required group membership for HIPS images
+        if not request.user.groups.filter(name="lsst_dp2").exists():
+            logger.warning(
+                "User %s does not have access to DP2 HIPS images.",
+                request.user.username,
+            )
+            return HttpResponseForbidden(
+                {"message": "User does not have access to DP2 HIPS images."},
+                content_type="application/json",
+                status=403,
+            )
+
     return HttpResponse({}, content_type="application/json", status=200)

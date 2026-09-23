@@ -4,13 +4,14 @@ FROM nginx:alpine
 RUN apk add --no-cache shadow
 
 # Criar grupos existentes no host e adicionar usuário nginx a eles
-RUN groupadd -g 10006 deployer && \ 
+RUN groupadd -g 10006 deployer && \
     groupadd -g 15050 lsst_dp1 && \
+    groupadd -g 15052 lsst_dp2 && \
     groupadd -g 39215 des && \
     groupadd -g 39216 lsst
 
 # Adicionar usuário nginx a todos os grupos
-RUN usermod -a -G deployer,lsst_dp1,des,lsst nginx
+RUN usermod -a -G deployer,lsst_dp1,lsst_dp2,des,lsst nginx
 
 # Ajustar permissões dos diretórios do nginx para o usuário nginx
 RUN chown -R nginx:nginx /var/cache/nginx && \
