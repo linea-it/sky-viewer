@@ -17,29 +17,18 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
   const [currentSurveyId, setCurrentSurveyId] = useState(null);
 
   const surveys = [
-    // Adiciona imagem do DES DR2 (pública)
+    // Adiciona imagem do LSST DP2 (privada, requer grupo 'lsst_dp2')
     {
-      id: "DES_DR2_IRG_LIneA",
-      name: "DES DR2 IRG at LIneA",
-      url: "https://datasets.linea.org.br/data/releases/des/dr2/images/hips/",
-      cooFrame: "equatorial",
-      // HipsOptions: https://cds-astro.github.io/aladin-lite/global.html#HiPSOptions
-      options: {
-        requestCredentials: 'include',
-        requestMode: 'cors',
-      },
-    },
-    // Adiciona imagem do LSST DP0.2 (privada, requer grupo 'dp02')
-    {
-      id: "LSST_DP02_IRG_LIneA",
-      name: "LSST DP0.2 IRG at LIneA",
-      url: `${baseHost}/data/releases/lsst/dp02/images/hips/`,
+      id: "LSST_DP2_IRG_LIneA",
+      name: "LSST DP2 IRG at LIneA",
+      url: `${baseHost}/data/releases/lsst/dp2/images/hips`,
       cooFrame: "equatorial",
       options: {
         requestCredentials: 'include',
         requestMode: 'cors',
       },
-      requireGroup: 'lsst_dp0.2', // Grupo necessário para acesso
+      requireGroup: 'lsst_dp2', // Grupo necessário para acesso
+      devOnly: false,
     },
     // Adiciona imagem do LSST DP1 (privada, requer grupo 'lsst_dp1')
     {
@@ -54,18 +43,17 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
       requireGroup: 'lsst_dp1', // Grupo necessário para acesso
       devOnly: false,
     },
-    // Adiciona imagem do LSST DP2 (privada, requer grupo 'lsst_dp2')
+    // Adiciona imagem do LSST DP0.2 (privada, requer grupo 'dp02')
     {
-      id: "LSST_DP2_IRG_LIneA",
-      name: "LSST DP2 IRG at LIneA",
-      url: `${baseHost}/data/releases/lsst/dp2/images/hips`,
+      id: "LSST_DP02_IRG_LIneA",
+      name: "LSST DP0.2 IRG at LIneA",
+      url: `${baseHost}/data/releases/lsst/dp02/images/hips/`,
       cooFrame: "equatorial",
       options: {
         requestCredentials: 'include',
         requestMode: 'cors',
       },
-      requireGroup: 'lsst_dp2', // Grupo necessário para acesso
-      devOnly: false,
+      requireGroup: 'lsst_dp0.2', // Grupo necessário para acesso
     },
     // Rubin First Look (pública)
     {
@@ -74,10 +62,47 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
       url: "https://images.rubinobservatory.org/hips/asteroids/color_ugri/",
       cooFrame: "equatorial",
       options: {},
-    }]
+    },
+    // Adiciona imagem do DES DR2 (pública)
+    {
+      id: "DES_DR2_IRG_LIneA",
+      name: "DES DR2 IRG at LIneA",
+      url: "https://datasets.linea.org.br/data/releases/des/dr2/images/hips/",
+      cooFrame: "equatorial",
+      // HipsOptions: https://cds-astro.github.io/aladin-lite/global.html#HiPSOptions
+      options: {
+        requestCredentials: 'include',
+        requestMode: 'cors',
+      },
+    }
+  ]
 
   // catálogos HiPScat
   const catalogs = [
+    {
+      id: 'lsst_dp2',
+      name: 'LSST DP2',
+      url: `${baseHost}/data/releases/lsst/dp2/catalogs/hips`,
+      options: {
+        color: '#f524e3',
+        requestCredentials: 'include',
+        requestMode: 'cors',
+      },
+      requireGroup: 'lsst_dp2',
+      devOnly: false,
+    },
+    {
+      id: 'lsst_dp1',
+      name: 'LSST DP1',
+      url: `${baseHost}/data/releases/lsst/dp1/catalogs/hips`,
+      options: {
+        color: '#2BC7EE',
+        requestCredentials: 'include',
+        requestMode: 'cors',
+      },
+      requireGroup: 'lsst_dp1',
+      devOnly: false,
+    },
     // Adiciona catálogo DES DR2 (público)
     {
       id: 'des_dr2',
@@ -96,30 +121,8 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
       },
       devOnly: true,
     },
-    {
-      id: 'lsst_dp1',
-      name: 'LSST DP1',
-      url: `${baseHost}/data/releases/lsst/dp1/catalogs/hips`,
-      options: {
-        color: '#2BC7EE',
-        requestCredentials: 'include',
-        requestMode: 'cors',
-      },
-      requireGroup: 'lsst_dp1',
-      devOnly: false,
-    },
-    {
-      id: 'lsst_dp2',
-      name: 'LSST DP2',
-      url: `${baseHost}/data/releases/lsst/dp2/catalogs/hips`,
-      options: {
-        color: '#F5A623',
-        requestCredentials: 'include',
-        requestMode: 'cors',
-      },
-      requireGroup: 'lsst_dp2',
-      devOnly: false,
-    },
+
+
     // // Adiciona catálogo LSST DP0.2 (privado)
     // {
     //   id: 'lsst_dp02',
@@ -190,7 +193,7 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
     "RUBIN_FIRST_LOOK_UGRI": "12 26 53.27 +08 56 49.0",
     "LSST_DP02_IRG_LIneA": "04 08 29.07 -37 02 47.9",
     "LSST_DP1_IRG_LIneA": "02 39 35.55 -34 30 38.3",
-    "LSST_DP2_IRG_LIneA": "02 39 35.55 -34 30 38.3",
+    "LSST_DP2_IRG_LIneA": "19 15 07.18 -20 23 51.4",
   }
 
   useEffect(() => {
