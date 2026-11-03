@@ -3,6 +3,7 @@
 import { AladinProvider } from './AladinProvider';
 import AladinViewer from './AladinViewer';
 import Controls from '@/components/Aladin/Controls';
+import LoadingBackdrop from './LoadingBackdrop';
 export default function Aladin({ userGroups = [], baseHost, isDev }) {
   return (
     <AladinProvider
@@ -11,6 +12,9 @@ export default function Aladin({ userGroups = [], baseHost, isDev }) {
       // https://cds-astro.github.io/aladin-lite/global.html#AladinOptions
       aladinParams={{
         fov: 1.5,
+        // Sem survey padrão: o Aladin só adiciona uma camada depois que todas as anteriores
+        // terminam de carregar, então a primeira imagem ficaria esperando o DSS do CDS.
+        survey: [],
         // target: "04 08 35.53 -37 06 27.6", // Coordenadas DES. 
         // target: "12 26 53.27 +08 56 49.0",
         projection: "AIT",
@@ -34,6 +38,7 @@ export default function Aladin({ userGroups = [], baseHost, isDev }) {
         display: 'flex',
         height: '100%',
         width: '100%',
+        position: 'relative',
       }}>
         <div style={{ flex: 1 }}>
           <AladinViewer />
@@ -44,6 +49,7 @@ export default function Aladin({ userGroups = [], baseHost, isDev }) {
         }}>
           <Controls />
         </div>
+        <LoadingBackdrop />
       </div>
     </AladinProvider>
   );

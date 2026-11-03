@@ -2,6 +2,17 @@
 import A from 'aladin-lite';
 import { useEffect, useRef, useCallback, useState } from 'react';
 
+// Imagem base pública, disponível para todos. Mesmo default do Canvas.
+export const DEFAULT_SURVEY_ID = 'DES_DR2_IRG_LIneA';
+
+// Imagem base inicial: a primeira que o usuário pode acessar, das mais recentes para as mais antigas.
+const INITIAL_SURVEY_PRIORITY = [
+  'LSST_DP2_IRG_LIneA',
+  'LSST_DP1_IRG_LIneA',
+  'LSST_DP02_IRG_LIneA',
+  DEFAULT_SURVEY_ID,
+];
+
 /**
  * Hook para controlar o Aladin Lite, aguardando a lib A estar disponível.
  */
@@ -205,8 +216,21 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
     A.init.then(() => {
       if (isCancelled) return;
 
-      aladinRef.current = A.aladin(containerRef.current, aladinParams);
-      setIsReady(true);
+      const aladin = A.aladin(containerRef.current, aladinParams);
+      aladinRef.current = aladin;
+
+      const loadInitialSurvey = () => {
+        const surveyId = INITIAL_SURVEY_PRIORITY.find(id => surveysRef.current[id]);
+        if (surveyId) applyLayer('base', surveyId, 1);
+      };
+
+      // O Aladin tira do hipsCache o survey que falha, então ele também sai do select.
+      // Se ainda não há imagem base, tenta a próxima da lista de prioridade.
+      const handleSurveyError = (surveyId) => {
+        if (aladinRef.current !== aladin) return;
+        delete surveysRef.current[surveyId];
+        if (lastBaseSurveyIdRef.current === null) loadInitialSurvey();
+      };
 
       // aladinRef.current.addListener('AL:zoom.changed', function (e) { console.log('Zoom changed', e); });
       // aladinRef.current.addListener('AL:HiPSLayer.added', function (e) { console.log('Hips added', e); });
@@ -219,9 +243,9 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
         const currentSurvey = aladinRef.current.getBaseImageLayer();
         if (currentSurvey) {
           setCurrentSurveyId(currentSurvey.id);
-          // Só re-centraliza quando a imagem base mudou de fato
-          // (o evento também dispara ao adicionar overlays, ex: mapas)
-          if (currentSurvey.id !== lastBaseSurveyIdRef.current) {
+          // Só centraliza na primeira imagem base: depois disso a visão não se move
+          // (o evento também dispara ao trocar a base e ao adicionar overlays)
+          if (lastBaseSurveyIdRef.current === null) {
             lastBaseSurveyIdRef.current = currentSurvey.id;
             const target = defaultTargets[currentSurvey.id];
             if (target) {
@@ -229,6 +253,8 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
               aladinRef.current.gotoObject(target);
             }
           }
+          // Indica que o Aladin e a primeira imagem estão prontos
+          setIsReady(true);
         }
       });
 
@@ -247,13 +273,19 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
           return; // Não adiciona o survey se não estiver em modo dev
         }
 
-        const hips_survey = aladinRef.current.createImageSurvey(survey.id, survey.name, survey.url, survey.cooFrame);
+        const hips_survey = aladinRef.current.createImageSurvey(survey.id, survey.name, survey.url, survey.cooFrame, undefined, {
+          errorCallback: () => handleSurveyError(survey.id),
+        });
 
-        aladinRef.current.setImageSurvey(hips_survey, survey.options || {});
+        // Só registra (hipsCache + menu nativo), sem trocar a imagem base.
+        aladinRef.current.addHiPSToFavorites(hips_survey);
 
         surveysRef.current[survey.id] = hips_survey;
         // console.log(`${survey.name} HIPS IMAGE added`);
       })
+
+      // Uma única troca de imagem base no init, independente da ordem do array.
+      loadInitialSurvey();
 
       // Adiciona os catálogos HiPScat
       catalogs.forEach(cat => {
