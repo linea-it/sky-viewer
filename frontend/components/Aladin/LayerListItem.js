@@ -11,17 +11,23 @@ import ExpandMore from '@mui/icons-material/ExpandMore';
 import Visibility from '@mui/icons-material/Visibility';
 import VisibilityOff from '@mui/icons-material/VisibilityOff';
 import DeleteIcon from '@mui/icons-material/Delete';
+import MyLocationIcon from '@mui/icons-material/MyLocation';
 import IconButton from '@mui/material/IconButton';
 import Stack from '@mui/material/Stack';
 
 // Linha de uma camada (survey, mapa ou catálogo): visibilidade, remoção e controles no collapse
-export default function LayerListItem({ name, visible, open, onToggle, onExtend, onRemove, removeDisabled = false, children }) {
+export default function LayerListItem({ name, visible, open, onToggle, onExtend, onRemove, removeDisabled = false, onCenter, centerDisabled = false, children }) {
 
   return (
     <React.Fragment>
       <ListItem
         secondaryAction={
           <React.Fragment>
+            {onCenter && (
+              <IconButton aria-label="center" title="Center" onClick={onCenter} disabled={centerDisabled}>
+                <MyLocationIcon />
+              </IconButton>
+            )}
             <IconButton aria-label="remove" onClick={onRemove} disabled={removeDisabled}>
               <DeleteIcon />
             </IconButton>
@@ -32,8 +38,8 @@ export default function LayerListItem({ name, visible, open, onToggle, onExtend,
         }
         disablePadding
       >
-        {/* Reserva o espaço dos 2 botões da secondaryAction para o nome não passar por baixo deles */}
-        <ListItemButton onClick={onToggle} sx={{ pl: 1, '&&': { pr: 11 } }}>
+        {/* Reserva o espaço dos botões da secondaryAction para o nome não passar por baixo deles */}
+        <ListItemButton onClick={onToggle} sx={{ pl: 1, '&&': { pr: onCenter ? 16 : 11 } }}>
           <ListItemIcon sx={{ minWidth: 36 }}>
             {visible ? <Visibility /> : <VisibilityOff />}
           </ListItemIcon>
@@ -58,5 +64,7 @@ LayerListItem.propTypes = {
   onExtend: PropTypes.func.isRequired,
   onRemove: PropTypes.func.isRequired,
   removeDisabled: PropTypes.bool,
+  onCenter: PropTypes.func,
+  centerDisabled: PropTypes.bool,
   children: PropTypes.node,
 }

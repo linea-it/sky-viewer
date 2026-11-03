@@ -17,6 +17,15 @@ const INITIAL_SURVEY_PRIORITY = [
 // Tempo sem nenhuma imagem até avisar que estão indisponíveis. Se a imagem ainda chegar, o aviso some.
 const INITIAL_LOAD_TIMEOUT_MS = 30000;
 
+// Coordenada default de cada survey: usada na primeira carga e no botão Center do painel
+const DEFAULT_TARGETS = {
+  "DES_DR2_IRG_LIneA": "02 32 44.09 -35 57 39.5",
+  "RUBIN_FIRST_LOOK_UGRI": "12 26 53.27 +08 56 49.0",
+  "LSST_DP02_IRG_LIneA": "04 08 29.07 -37 02 47.9",
+  "LSST_DP1_IRG_LIneA": "02 39 35.55 -34 30 38.3",
+  "LSST_DP2_IRG_LIneA": "19 15 07.18 -20 23 51.4",
+};
+
 /**
  * Hook para controlar o Aladin Lite, aguardando a lib A estar disponível.
  */
@@ -33,7 +42,7 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
   const imageLayersRef = useRef({}) // { [layerName]: { layer, opacity, visible } } - surveys e mapas
   const lastBaseSurveyIdRef = useRef(null)
   const [currentSurveyId, setCurrentSurveyId] = useState(null);
-  // Espelha na UI as camadas de survey da pilha do Aladin: [{ name, id, label, opacity, visible }]
+  // Espelha na UI as camadas de survey da pilha do Aladin: [{ name, id, label, hasTarget, opacity, visible }]
   const [surveyLayers, setSurveyLayers] = useState([]);
   // Catálogos com linha no painel, na ordem em que foram adicionados
   const [activeCatalogIds, setActiveCatalogIds] = useState([]);
@@ -210,14 +219,6 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
     (m.devOnly !== true || isDev === true)
   );
 
-  const defaultTargets = {
-    "DES_DR2_IRG_LIneA": "02 32 44.09 -35 57 39.5",
-    "RUBIN_FIRST_LOOK_UGRI": "12 26 53.27 +08 56 49.0",
-    "LSST_DP02_IRG_LIneA": "04 08 29.07 -37 02 47.9",
-    "LSST_DP1_IRG_LIneA": "02 39 35.55 -34 30 38.3",
-    "LSST_DP2_IRG_LIneA": "19 15 07.18 -20 23 51.4",
-  }
-
   useEffect(() => {
     let isCancelled = false;
     let loadTimeout;
@@ -275,7 +276,7 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
           // (o evento também dispara ao trocar a base e ao adicionar overlays)
           if (lastBaseSurveyIdRef.current === null) {
             lastBaseSurveyIdRef.current = currentSurvey.id;
-            const target = defaultTargets[currentSurvey.id];
+            const target = DEFAULT_TARGETS[currentSurvey.id];
             if (target) {
               // Goto the target of the current survey
               aladinRef.current.gotoObject(target);
@@ -460,6 +461,7 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
         name,
         id: layer.id,
         label: surveysRef.current[layer.id].name,
+        hasTarget: Boolean(DEFAULT_TARGETS[layer.id]),
         opacity: hidden ? entry.opacity : layer.getOpacity(),
         visible: !hidden,
       };
@@ -532,6 +534,11 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
     if (!aladinRef.current || !surveysRef.current[surveyId]) return;
     applyLayer(`survey-${surveyId}`, surveyId, opacity);
   }, [applyLayer]);
+
+  const centerOnSurvey = useCallback((surveyId) => {
+    const target = DEFAULT_TARGETS[surveyId];
+    if (target) aladinRef.current?.gotoObject(target);
+  }, []);
 
   const setSurveyLayerOpacity = useCallback((name, opacity) => {
     setLayerOpacity(name, opacity);
@@ -606,6 +613,7 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
     setSurveyLayerOpacity,
     setSurveyLayerVisibility,
     removeSurveyLayer,
+    centerOnSurvey,
     activeCatalogIds,
     addCatalogLayer,
     removeCatalogLayer,
