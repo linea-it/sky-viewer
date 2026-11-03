@@ -11,6 +11,11 @@ import SurveyLayerItem from './SurveyLayerItem';
 export default function SurveyControls() {
   const { isReady, surveysRef, surveyLayers, addSurveyLayer } = useAladinContext();
 
+  // Imagem que aparece por cima: a primeira linha visível. Com um survey só não há o que destacar.
+  const topLayer = surveyLayers.length > 1
+    ? surveyLayers.find(surveyLayer => surveyLayer.visible && surveyLayer.opacity > 0)
+    : null;
+
   const activeIds = surveyLayers.map(surveyLayer => surveyLayer.id);
   const availableSurveys = Object.values(surveysRef.current || {})
     .filter(survey => !activeIds.includes(survey.id));
@@ -44,6 +49,7 @@ export default function SurveyControls() {
             key={`survey-layer-item-${surveyLayer.name}`}
             surveyLayer={surveyLayer}
             removeDisabled={surveyLayers.length <= 1}
+            isTop={surveyLayer.name === topLayer?.name}
           />
         ))}
       </List>

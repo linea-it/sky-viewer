@@ -4,7 +4,7 @@ import { useAladinContext } from '@/components/Aladin/AladinContext';
 import LayerListItem from '@/components/Aladin/LayerListItem';
 import OpacitySlider from '@/components/Aladin/OpacitySlider';
 
-export default function SurveyLayerItem({ surveyLayer, removeDisabled }) {
+export default function SurveyLayerItem({ surveyLayer, removeDisabled, isTop }) {
   const { setSurveyLayerOpacity, setSurveyLayerVisibility, removeSurveyLayer, centerOnSurvey } = useAladinContext();
 
   const [open, setOpen] = React.useState(true);
@@ -20,6 +20,7 @@ export default function SurveyLayerItem({ surveyLayer, removeDisabled }) {
       removeDisabled={removeDisabled}
       onCenter={() => centerOnSurvey(surveyLayer.id)}
       centerDisabled={!surveyLayer.hasTarget}
+      selected={isTop}
     >
       <OpacitySlider
         value={surveyLayer.opacity}
@@ -32,4 +33,5 @@ export default function SurveyLayerItem({ surveyLayer, removeDisabled }) {
 SurveyLayerItem.propTypes = {
   surveyLayer: PropTypes.object.isRequired,
   removeDisabled: PropTypes.bool.isRequired,
+  isTop: PropTypes.bool.isRequired,
 }

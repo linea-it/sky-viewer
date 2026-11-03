@@ -16,7 +16,7 @@ import IconButton from '@mui/material/IconButton';
 import Stack from '@mui/material/Stack';
 
 // Linha de uma camada (survey, mapa ou catálogo): visibilidade, remoção e controles no collapse
-export default function LayerListItem({ name, visible, open, onToggle, onExtend, onRemove, removeDisabled = false, onCenter, centerDisabled = false, children }) {
+export default function LayerListItem({ name, visible, open, onToggle, onExtend, onRemove, removeDisabled = false, onCenter, centerDisabled = false, selected = false, children }) {
 
   return (
     <React.Fragment>
@@ -39,7 +39,7 @@ export default function LayerListItem({ name, visible, open, onToggle, onExtend,
         disablePadding
       >
         {/* Reserva o espaço dos botões da secondaryAction para o nome não passar por baixo deles */}
-        <ListItemButton onClick={onToggle} sx={{ pl: 1, '&&': { pr: onCenter ? 16 : 11 } }}>
+        <ListItemButton selected={selected} onClick={onToggle} sx={{ pl: 1, '&&': { pr: onCenter ? 16 : 11 } }}>
           <ListItemIcon sx={{ minWidth: 36 }}>
             {visible ? <Visibility /> : <VisibilityOff />}
           </ListItemIcon>
@@ -66,5 +66,6 @@ LayerListItem.propTypes = {
   removeDisabled: PropTypes.bool,
   onCenter: PropTypes.func,
   centerDisabled: PropTypes.bool,
+  selected: PropTypes.bool,
   children: PropTypes.node,
 }
