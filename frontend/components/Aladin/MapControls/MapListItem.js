@@ -1,21 +1,9 @@
 import React from 'react';
 import PropTypes from 'prop-types'
-import Collapse from '@mui/material/Collapse';
-import ListItem from '@mui/material/ListItem';
-import ListItemButton from '@mui/material/ListItemButton';
-import ListItemIcon from '@mui/material/ListItemIcon';
-import ListItemText from '@mui/material/ListItemText';
-import Divider from '@mui/material/Divider';
-import ExpandLess from '@mui/icons-material/ExpandLess';
-import ExpandMore from '@mui/icons-material/ExpandMore';
-import Visibility from '@mui/icons-material/Visibility';
-import VisibilityOff from '@mui/icons-material/VisibilityOff';
-import DeleteIcon from '@mui/icons-material/Delete';
-import IconButton from '@mui/material/IconButton';
-import Stack from '@mui/material/Stack';
 import { useAladinContext } from '@/components/Aladin/AladinContext';
+import LayerListItem from '@/components/Aladin/LayerListItem';
+import OpacitySlider from '@/components/Aladin/OpacitySlider';
 import MapSelect from './MapSelect';
-import OpacitySlider from './OpacitySlider';
 
 const DEFAULT_OPACITY = 0.8;
 
@@ -69,43 +57,25 @@ export default function MapListItem({ mapGroup }) {
   };
 
   return (
-    <React.Fragment>
-      <ListItem
-        key={`map-option-${mapGroup.surveyKey}`}
-        secondaryAction={
-          <React.Fragment>
-            <IconButton aria-label="remove" onClick={handleRemove} disabled={!mapId}>
-              <DeleteIcon />
-            </IconButton>
-            <IconButton edge="end" aria-label="expand" onClick={handleExtend}>
-              {open ? <ExpandLess /> : <ExpandMore />}
-            </IconButton>
-          </React.Fragment>
-        }
-        disablePadding
-      >
-        <ListItemButton onClick={handleToggle}>
-          <ListItemIcon>
-            {visible ? <Visibility /> : <VisibilityOff />}
-          </ListItemIcon>
-          <ListItemText primary={mapGroup.name} />
-        </ListItemButton>
-      </ListItem>
-      <Collapse in={open} timeout="auto" unmountOnExit>
-        <Stack spacing={1} mb={1}>
-          <MapSelect
-            value={mapId}
-            onChange={handleMapChange}
-            options={options}
-          />
-          <OpacitySlider
-            value={opacity}
-            onChange={handleOpacityChange}
-          />
-        </Stack>
-      </Collapse>
-      <Divider />
-    </React.Fragment>
+    <LayerListItem
+      name={mapGroup.name}
+      visible={visible}
+      open={open}
+      onToggle={handleToggle}
+      onExtend={handleExtend}
+      onRemove={handleRemove}
+      removeDisabled={!mapId}
+    >
+      <MapSelect
+        value={mapId}
+        onChange={handleMapChange}
+        options={options}
+      />
+      <OpacitySlider
+        value={opacity}
+        onChange={handleOpacityChange}
+      />
+    </LayerListItem>
   )
 }
 

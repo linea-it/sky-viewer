@@ -12,7 +12,7 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
   const surveysRef = useRef({})
   const catalogsRef = useRef({})
   const mapSurveysRef = useRef({}) // { [surveyKey]: { [mapId]: hips } } - surveys de mapa pré-registrados
-  const mapLayersRef = useRef({}) // { [surveyKey]: { mapId, hips, opacity, visible } }
+  const imageLayersRef = useRef({}) // { [layerName]: { layer, opacity, visible } } - surveys e mapas
   const lastBaseSurveyIdRef = useRef(null)
   const [currentSurveyId, setCurrentSurveyId] = useState(null);
 
@@ -314,7 +314,7 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
       }
       aladinRef.current = null;
       mapSurveysRef.current = {};
-      mapLayersRef.current = {};
+      imageLayersRef.current = {};
       lastBaseSurveyIdRef.current = null;
       setIsReady(false);
     };
@@ -344,40 +344,66 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
     }
   }, []);
 
-  // Aplica/substitui o overlay de mapa do survey; sempre torna o mapa visível.
+  // Estado da layer; layers que entraram pelo menu nativo são registradas no primeiro uso
+  const getLayerEntry = useCallback((layerName) => {
+    if (!imageLayersRef.current[layerName]) {
+      const layer = aladinRef.current?.getOverlayImageLayer(layerName);
+      if (!layer) return null;
+      imageLayersRef.current[layerName] = { layer, opacity: layer.getOpacity(), visible: true };
+    }
+    return imageLayersRef.current[layerName];
+  }, []);
+
+  // Aplica/substitui a layer. Mesmo layer name => substitui no mesmo lugar da pilha.
   // Mesmo comportamento do botão "+ Surveys" nativo: adiciona uma nova layer de imagem
+  const applyLayer = useCallback((layerName, hipsOrId, opacity, visible = true) => {
+    const layer = aladinRef.current.setOverlayImageLayer(hipsOrId, layerName);
+    layer.setOpacity(visible ? opacity : 0);
+    imageLayersRef.current[layerName] = { layer, opacity, visible };
+    return layer;
+  }, []);
+
+  const setLayerOpacity = useCallback((layerName, opacity) => {
+    const entry = getLayerEntry(layerName);
+    if (!entry) return;
+    entry.opacity = opacity;
+    if (entry.visible) entry.layer.setOpacity(opacity);
+  }, [getLayerEntry]);
+
+  // Mostra/oculta a layer sem perder a opacidade (opacity 0 <-> valor guardado)
+  const setLayerVisibility = useCallback((layerName, visible) => {
+    const entry = getLayerEntry(layerName);
+    if (!entry) return;
+    entry.visible = visible;
+    entry.layer.setOpacity(visible ? entry.opacity : 0);
+  }, [getLayerEntry]);
+
+  // Remove a layer (equivalente ao botão de lixeira do Aladin)
+  const removeLayer = useCallback((layerName) => {
+    aladinRef.current?.removeImageLayer(layerName);
+    delete imageLayersRef.current[layerName];
+  }, []);
+
+  // Aplica/substitui o overlay de mapa do survey; sempre torna o mapa visível.
   const setMapOverlay = useCallback((surveyKey, mapId, opacity = 0.8) => {
     if (!aladinRef.current) return;
     const hips_map = mapSurveysRef.current[surveyKey]?.[mapId];
     if (!hips_map) return;
     // Mesmo layer name => substitui o overlay anterior deste survey
-    const layer = aladinRef.current.setOverlayImageLayer(hips_map, `map-${surveyKey}`);
-    layer.setOpacity(opacity);
-    mapLayersRef.current[surveyKey] = { mapId, hips: layer, opacity, visible: true };
-  }, []);
+    applyLayer(`map-${surveyKey}`, hips_map, opacity);
+  }, [applyLayer]);
 
   const setMapOpacity = useCallback((surveyKey, opacity) => {
-    const layer = mapLayersRef.current[surveyKey];
-    if (!layer) return;
-    layer.opacity = opacity;
-    if (layer.visible) layer.hips.setOpacity(opacity);
-  }, []);
+    setLayerOpacity(`map-${surveyKey}`, opacity);
+  }, [setLayerOpacity]);
 
-  // Mostra/oculta o mapa sem perder banda nem opacidade (opacity 0 <-> valor guardado)
   const setMapVisibility = useCallback((surveyKey, visible) => {
-    const layer = mapLayersRef.current[surveyKey];
-    if (!layer) return;
-    layer.visible = visible;
-    layer.hips.setOpacity(visible ? layer.opacity : 0);
-  }, []);
+    setLayerVisibility(`map-${surveyKey}`, visible);
+  }, [setLayerVisibility]);
 
-  // Remove a layer de mapa do survey (equivalente ao botão de lixeira do Aladin)
   const removeMapOverlay = useCallback((surveyKey) => {
-    if (!aladinRef.current) return;
-    if (!mapLayersRef.current[surveyKey]) return;
-    aladinRef.current.removeImageLayer(`map-${surveyKey}`);
-    delete mapLayersRef.current[surveyKey];
-  }, []);
+    removeLayer(`map-${surveyKey}`);
+  }, [removeLayer]);
 
   const addMarker = useCallback((ra, dec, options = {}) => {
     const overlay = aladinRef.current?.createOverlay();
