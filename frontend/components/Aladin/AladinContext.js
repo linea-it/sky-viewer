@@ -27,6 +27,9 @@ export const AladinContext = createContext({
   setSurveyLayerOpacity: () => { },
   setSurveyLayerVisibility: () => { },
   removeSurveyLayer: () => { },
+  activeCatalogIds: [],
+  addCatalogLayer: () => { },
+  removeCatalogLayer: () => { },
 });
 
 /**

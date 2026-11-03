@@ -28,6 +28,8 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
   const [currentSurveyId, setCurrentSurveyId] = useState(null);
   // Espelha na UI as camadas de survey da pilha do Aladin: [{ name, id, label, opacity, visible }]
   const [surveyLayers, setSurveyLayers] = useState([]);
+  // Catálogos com linha no painel, na ordem em que foram adicionados
+  const [activeCatalogIds, setActiveCatalogIds] = useState([]);
 
   const surveys = [
     // Adiciona imagem do LSST DP2 (privada, requer grupo 'lsst_dp2')
@@ -374,6 +376,7 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
       imageLayersRef.current = {};
       lastBaseSurveyIdRef.current = null;
       setSurveyLayers([]);
+      setActiveCatalogIds([]);
       setIsReady(false);
     };
   }, [aladinParams]);
@@ -519,6 +522,19 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
     removeLayer(next.name);
   }, [applyLayer, getLayerEntry, getSurveyStack, removeLayer]);
 
+  // Os catálogos já estão no Aladin, ocultos: adicionar ao painel é mostrar
+  const addCatalogLayer = useCallback((id) => {
+    const catalog = catalogsRef.current[id];
+    if (!catalog) return;
+    catalog.show();
+    setActiveCatalogIds(prev => prev.includes(id) ? prev : [...prev, id]);
+  }, []);
+
+  const removeCatalogLayer = useCallback((id) => {
+    catalogsRef.current[id]?.hide();
+    setActiveCatalogIds(prev => prev.filter(activeId => activeId !== id));
+  }, []);
+
   const addMarker = useCallback((ra, dec, options = {}) => {
     const overlay = aladinRef.current?.createOverlay();
     if (overlay) {
@@ -550,5 +566,8 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
     setSurveyLayerOpacity,
     setSurveyLayerVisibility,
     removeSurveyLayer,
+    activeCatalogIds,
+    addCatalogLayer,
+    removeCatalogLayer,
   };
 }
