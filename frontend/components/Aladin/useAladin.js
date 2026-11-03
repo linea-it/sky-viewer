@@ -267,6 +267,7 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
         if (entry && entry.layer !== added) {
           delete imageLayersRef.current[added.layer];
         }
+        keepMapsOnTop();
         const currentSurvey = aladinRef.current.getBaseImageLayer();
         if (currentSurvey) {
           setCurrentSurveyId(currentSurvey.id);
@@ -426,6 +427,19 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
       catalog.show();
     } else {
       catalog.hide();
+    }
+  }, []);
+
+  // Toda layer nova entra no topo da pilha: desce os surveys para baixo dos mapas,
+  // mantendo a ordem relativa. Precisa rodar depois que a layer entrou (AL:HiPSLayer.added).
+  const keepMapsOnTop = useCallback(() => {
+    const view = aladinRef.current?.view;
+    if (!view) return;
+    const stack = view.overlayLayers; // swapLayers altera este array
+    for (let i = 1; i < stack.length; i++) {
+      for (let j = i; j > 0 && !stack[j].startsWith('map-') && stack[j - 1].startsWith('map-'); j--) {
+        view.swapLayers(stack[j], stack[j - 1]);
+      }
     }
   }, []);
 
