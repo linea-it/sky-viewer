@@ -22,6 +22,17 @@ export const AladinContext = createContext({
   setMapOpacity: () => { },
   setMapVisibility: () => { },
   removeMapOverlay: () => { },
+  loadFailed: false,
+  retryLoad: () => { },
+  surveyLayers: [],
+  addSurveyLayer: () => { },
+  setSurveyLayerOpacity: () => { },
+  setSurveyLayerVisibility: () => { },
+  removeSurveyLayer: () => { },
+  centerOnSurvey: () => { },
+  activeCatalogIds: [],
+  addCatalogLayer: () => { },
+  removeCatalogLayer: () => { },
 });
 
 /**

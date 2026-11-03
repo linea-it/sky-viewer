@@ -1,22 +1,16 @@
 import React from 'react';
 import PropTypes from 'prop-types'
-import Checkbox from '@mui/material/Checkbox';
-import Collapse from '@mui/material/Collapse';
-import ListItem from '@mui/material/ListItem';
-import ListItemButton from '@mui/material/ListItemButton';
-import ListItemIcon from '@mui/material/ListItemIcon';
-import ListItemText from '@mui/material/ListItemText';
-import Divider from '@mui/material/Divider';
-import ExpandLess from '@mui/icons-material/ExpandLess';
-import ExpandMore from '@mui/icons-material/ExpandMore';
-import IconButton from '@mui/material/IconButton';
 import Stack from '@mui/material/Stack';
+import { useAladinContext } from '@/components/Aladin/AladinContext';
+import LayerListItem from '@/components/Aladin/LayerListItem';
 import ShapeSelect from './ShapeSelect';
 import ColorSelect from './ColorSelect';
 import SizeSelect from './SizeSelect';
-export default function CatalogListItem({ catalog }) {
 
-  const [open, setOpen] = React.useState(false);
+export default function CatalogListItem({ catalogId, catalog }) {
+  const { removeCatalogLayer } = useAladinContext();
+
+  const [open, setOpen] = React.useState(true);
   const [checked, setChecked] = React.useState(catalog.isShowing);
   const [color, setColor] = React.useState(catalog.color);
   const [shape, setShape] = React.useState(catalog.shape);
@@ -51,49 +45,33 @@ export default function CatalogListItem({ catalog }) {
   };
 
   return (
-    <React.Fragment>
-      <ListItem
-        key={`catalog-option-${catalog.name.replace(/ /g, "-")}`}
-        secondaryAction={
-          <IconButton edge="end" aria-label="expand" onClick={handleExtend}>
-            {open ? <ExpandLess /> : <ExpandMore />}
-          </IconButton>
-        }
-        disablePadding
-      >
-        <ListItemButton onClick={handleToggle}>
-          <ListItemIcon>
-            <Checkbox
-              edge="start"
-              checked={checked}
-              tabIndex={-1}
-              disableRipple
-            />
-          </ListItemIcon>
-          <ListItemText primary={catalog.name} />
-        </ListItemButton>
-      </ListItem>
-      <Collapse in={open} timeout="auto" unmountOnExit>
-        <Stack direction="row" spacing={1} mb={1}>
-          <ColorSelect
-            value={color}
-            onChange={handleColorChange}
-          />
-          <ShapeSelect
-            value={shape}
-            onChange={handleShapeChange}
-          />
-        </Stack>
-        <SizeSelect
-          value={size}
-          onChange={handleSizeChange}
+    <LayerListItem
+      name={catalog.name}
+      visible={checked}
+      open={open}
+      onToggle={handleToggle}
+      onExtend={handleExtend}
+      onRemove={() => removeCatalogLayer(catalogId)}
+    >
+      <Stack direction="row" spacing={1}>
+        <ColorSelect
+          value={color}
+          onChange={handleColorChange}
         />
-      </Collapse>
-      <Divider />
-    </React.Fragment>
+        <ShapeSelect
+          value={shape}
+          onChange={handleShapeChange}
+        />
+      </Stack>
+      <SizeSelect
+        value={size}
+        onChange={handleSizeChange}
+      />
+    </LayerListItem>
   )
 }
 
 CatalogListItem.propTypes = {
+  catalogId: PropTypes.string.isRequired,
   catalog: PropTypes.object.isRequired,
 }

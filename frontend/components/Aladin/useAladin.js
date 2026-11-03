@@ -2,6 +2,30 @@
 import A from 'aladin-lite';
 import { useEffect, useRef, useCallback, useState } from 'react';
 
+// Imagem base pública, disponível para todos. Mesmo default do Canvas.
+export const DEFAULT_SURVEY_ID = 'DES_DR2_IRG_LIneA';
+
+// Imagem base inicial: a primeira que o usuário pode acessar, das mais recentes para as mais antigas.
+const INITIAL_SURVEY_PRIORITY = [
+  'LSST_DP2_IRG_LIneA',
+  'LSST_DP1_IRG_LIneA',
+  'LSST_DP02_IRG_LIneA',
+  DEFAULT_SURVEY_ID,
+  'RUBIN_FIRST_LOOK_UGRI',
+];
+
+// Tempo sem nenhuma imagem até avisar que estão indisponíveis. Se a imagem ainda chegar, o aviso some.
+const INITIAL_LOAD_TIMEOUT_MS = 30000;
+
+// Coordenada default de cada survey: usada na primeira carga e no botão Center do painel
+const DEFAULT_TARGETS = {
+  "DES_DR2_IRG_LIneA": "02 32 44.09 -35 57 39.5",
+  "RUBIN_FIRST_LOOK_UGRI": "12 26 53.27 +08 56 49.0",
+  "LSST_DP02_IRG_LIneA": "04 08 29.07 -37 02 47.9",
+  "LSST_DP1_IRG_LIneA": "02 39 35.55 -34 30 38.3",
+  "LSST_DP2_IRG_LIneA": "19 15 07.18 -20 23 51.4",
+};
+
 /**
  * Hook para controlar o Aladin Lite, aguardando a lib A estar disponível.
  */
@@ -9,12 +33,19 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
   const containerRef = useRef(null);
   const aladinRef = useRef(null);
   const [isReady, setIsReady] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
+  // Incrementar recria o Aladin: é o "Try again" do aviso de indisponibilidade
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const surveysRef = useRef({})
   const catalogsRef = useRef({})
   const mapSurveysRef = useRef({}) // { [surveyKey]: { [mapId]: hips } } - surveys de mapa pré-registrados
-  const mapLayersRef = useRef({}) // { [surveyKey]: { mapId, hips, opacity, visible } }
+  const imageLayersRef = useRef({}) // { [layerName]: { layer, opacity, visible } } - surveys e mapas
   const lastBaseSurveyIdRef = useRef(null)
   const [currentSurveyId, setCurrentSurveyId] = useState(null);
+  // Espelha na UI as camadas de survey da pilha do Aladin: [{ name, id, label, hasTarget, opacity, visible }]
+  const [surveyLayers, setSurveyLayers] = useState([]);
+  // Catálogos com linha no painel, na ordem em que foram adicionados
+  const [activeCatalogIds, setActiveCatalogIds] = useState([]);
 
   const surveys = [
     // Adiciona imagem do LSST DP2 (privada, requer grupo 'lsst_dp2')
@@ -188,16 +219,9 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
     (m.devOnly !== true || isDev === true)
   );
 
-  const defaultTargets = {
-    "DES_DR2_IRG_LIneA": "02 32 44.09 -35 57 39.5",
-    "RUBIN_FIRST_LOOK_UGRI": "12 26 53.27 +08 56 49.0",
-    "LSST_DP02_IRG_LIneA": "04 08 29.07 -37 02 47.9",
-    "LSST_DP1_IRG_LIneA": "02 39 35.55 -34 30 38.3",
-    "LSST_DP2_IRG_LIneA": "19 15 07.18 -20 23 51.4",
-  }
-
   useEffect(() => {
     let isCancelled = false;
+    let loadTimeout;
 
     if (!containerRef.current) return;
 
@@ -205,8 +229,30 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
     A.init.then(() => {
       if (isCancelled) return;
 
-      aladinRef.current = A.aladin(containerRef.current, aladinParams);
-      setIsReady(true);
+      const aladin = A.aladin(containerRef.current, aladinParams);
+      aladinRef.current = aladin;
+
+      // Cobre servidores que não respondem e não chegam a disparar o errorCallback
+      loadTimeout = setTimeout(() => setLoadFailed(true), INITIAL_LOAD_TIMEOUT_MS);
+
+      const loadInitialSurvey = () => {
+        const surveyId = INITIAL_SURVEY_PRIORITY.find(id => surveysRef.current[id]);
+        if (surveyId) {
+          applyLayer('base', surveyId, 1);
+        } else {
+          // Acabou a lista. O Aladin ainda tenta o DSS do CDS: se entrar, o backdrop fecha.
+          setLoadFailed(true);
+        }
+      };
+
+      // O Aladin tira do hipsCache o survey que falha, então ele também sai do select.
+      // Se ainda não há imagem base, tenta a próxima da lista de prioridade.
+      const handleSurveyError = (surveyId) => {
+        if (aladinRef.current !== aladin) return;
+        delete surveysRef.current[surveyId];
+        syncSurveyLayers();
+        if (lastBaseSurveyIdRef.current === null) loadInitialSurvey();
+      };
 
       // aladinRef.current.addListener('AL:zoom.changed', function (e) { console.log('Zoom changed', e); });
       // aladinRef.current.addListener('AL:HiPSLayer.added', function (e) { console.log('Hips added', e); });
@@ -214,22 +260,49 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
       // aladinRef.current.addListener('AL:HiPSLayer.swap', function (e) { console.log('Hips swaped', e); });
 
       // Evento disparado toda vez que uma imagem HIPS é selecionada ou alterada
-      aladinRef.current.addListener('AL:HiPSLayer.added', () => {
+      aladinRef.current.addListener('AL:HiPSLayer.added', (event) => {
         // console.log('Survey changed');
+        // A layer foi substituída por fora do hook (ex: menu nativo): descarta o estado antigo
+        const added = event.detail?.layer;
+        const entry = added && imageLayersRef.current[added.layer];
+        if (entry && entry.layer !== added) {
+          delete imageLayersRef.current[added.layer];
+        }
+        keepMapsOnTop();
         const currentSurvey = aladinRef.current.getBaseImageLayer();
         if (currentSurvey) {
           setCurrentSurveyId(currentSurvey.id);
-          // Só re-centraliza quando a imagem base mudou de fato
-          // (o evento também dispara ao adicionar overlays, ex: mapas)
-          if (currentSurvey.id !== lastBaseSurveyIdRef.current) {
+          // Só centraliza na primeira imagem base: depois disso a visão não se move
+          // (o evento também dispara ao trocar a base e ao adicionar overlays)
+          if (lastBaseSurveyIdRef.current === null) {
             lastBaseSurveyIdRef.current = currentSurvey.id;
-            const target = defaultTargets[currentSurvey.id];
+            const target = DEFAULT_TARGETS[currentSurvey.id];
             if (target) {
               // Goto the target of the current survey
               aladinRef.current.gotoObject(target);
             }
           }
+          // Indica que o Aladin e a primeira imagem estão prontos
+          clearTimeout(loadTimeout);
+          setLoadFailed(false);
+          setIsReady(true);
         }
+        syncSurveyLayers();
+      });
+
+      // Ao terminar um carregamento o Aladin renomeia a layer do fundo para "base"
+      aladinRef.current.addListener('AL:HiPSLayer.renamed', (event) => {
+        const { layer, newLayer } = event.detail;
+        if (imageLayersRef.current[layer]) {
+          imageLayersRef.current[newLayer] = imageLayersRef.current[layer];
+          delete imageLayersRef.current[layer];
+        }
+        syncSurveyLayers();
+      });
+
+      // A pilha do Aladin é a fonte da verdade: mudanças no menu nativo também chegam à UI
+      ['AL:HiPSLayer.removed', 'AL:HiPSLayer.swap', 'AL:HiPSLayer.changed'].forEach(eventName => {
+        aladinRef.current.addListener(eventName, () => syncSurveyLayers());
       });
 
 
@@ -247,13 +320,19 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
           return; // Não adiciona o survey se não estiver em modo dev
         }
 
-        const hips_survey = aladinRef.current.createImageSurvey(survey.id, survey.name, survey.url, survey.cooFrame);
+        const hips_survey = aladinRef.current.createImageSurvey(survey.id, survey.name, survey.url, survey.cooFrame, undefined, {
+          errorCallback: () => handleSurveyError(survey.id),
+        });
 
-        aladinRef.current.setImageSurvey(hips_survey, survey.options || {});
+        // Só registra (hipsCache + menu nativo), sem trocar a imagem base.
+        aladinRef.current.addHiPSToFavorites(hips_survey);
 
         surveysRef.current[survey.id] = hips_survey;
         // console.log(`${survey.name} HIPS IMAGE added`);
       })
+
+      // Uma única troca de imagem base no init, independente da ordem do array.
+      loadInitialSurvey();
 
       // Adiciona os catálogos HiPScat
       catalogs.forEach(cat => {
@@ -309,16 +388,24 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
 
     return () => {
       isCancelled = true;
+      clearTimeout(loadTimeout);
       if (containerRef.current) {
         containerRef.current.innerHTML = '';
       }
       aladinRef.current = null;
       mapSurveysRef.current = {};
-      mapLayersRef.current = {};
+      imageLayersRef.current = {};
       lastBaseSurveyIdRef.current = null;
+      setSurveyLayers([]);
+      setActiveCatalogIds([]);
       setIsReady(false);
+      setLoadFailed(false);
     };
-  }, [aladinParams]);
+  }, [aladinParams, loadAttempt]);
+
+  const retryLoad = useCallback(() => {
+    setLoadAttempt(attempt => attempt + 1);
+  }, []);
 
   // Métodos utilitários
 
@@ -344,39 +431,153 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
     }
   }, []);
 
-  // Aplica/substitui o overlay de mapa do survey; sempre torna o mapa visível.
+  // Toda layer nova entra no topo da pilha: desce os surveys para baixo dos mapas,
+  // mantendo a ordem relativa. Precisa rodar depois que a layer entrou (AL:HiPSLayer.added).
+  const keepMapsOnTop = useCallback(() => {
+    const view = aladinRef.current?.view;
+    if (!view) return;
+    const stack = view.overlayLayers; // swapLayers altera este array
+    for (let i = 1; i < stack.length; i++) {
+      for (let j = i; j > 0 && !stack[j].startsWith('map-') && stack[j - 1].startsWith('map-'); j--) {
+        view.swapLayers(stack[j], stack[j - 1]);
+      }
+    }
+  }, []);
+
+  // Camadas de survey na ordem da pilha do Aladin (mapas ficam de fora)
+  const getSurveyStack = useCallback(() => {
+    if (!aladinRef.current) return [];
+    return aladinRef.current.getStackLayers()
+      .map(name => ({ name, layer: aladinRef.current.getOverlayImageLayer(name) }))
+      .filter(({ layer }) => layer && surveysRef.current[layer.id]);
+  }, []);
+
+  const syncSurveyLayers = useCallback(() => {
+    // A pilha vai do fundo para o topo; na UI a primeira linha é a camada de cima
+    setSurveyLayers(getSurveyStack().reverse().map(({ name, layer }) => {
+      const entry = imageLayersRef.current[name];
+      const hidden = entry?.layer === layer && !entry.visible;
+      return {
+        name,
+        id: layer.id,
+        label: surveysRef.current[layer.id].name,
+        hasTarget: Boolean(DEFAULT_TARGETS[layer.id]),
+        opacity: hidden ? entry.opacity : layer.getOpacity(),
+        visible: !hidden,
+      };
+    }));
+  }, [getSurveyStack]);
+
+  // Estado da layer; layers que entraram pelo menu nativo são registradas no primeiro uso
+  const getLayerEntry = useCallback((layerName) => {
+    if (!imageLayersRef.current[layerName]) {
+      const layer = aladinRef.current?.getOverlayImageLayer(layerName);
+      if (!layer) return null;
+      imageLayersRef.current[layerName] = { layer, opacity: layer.getOpacity(), visible: true };
+    }
+    return imageLayersRef.current[layerName];
+  }, []);
+
+  // Aplica/substitui a layer. Mesmo layer name => substitui no mesmo lugar da pilha.
   // Mesmo comportamento do botão "+ Surveys" nativo: adiciona uma nova layer de imagem
+  const applyLayer = useCallback((layerName, hipsOrId, opacity, visible = true) => {
+    const layer = aladinRef.current.setOverlayImageLayer(hipsOrId, layerName);
+    layer.setOpacity(visible ? opacity : 0);
+    imageLayersRef.current[layerName] = { layer, opacity, visible };
+    return layer;
+  }, []);
+
+  const setLayerOpacity = useCallback((layerName, opacity) => {
+    const entry = getLayerEntry(layerName);
+    if (!entry) return;
+    entry.opacity = opacity;
+    if (entry.visible) entry.layer.setOpacity(opacity);
+  }, [getLayerEntry]);
+
+  // Mostra/oculta a layer sem perder a opacidade (opacity 0 <-> valor guardado)
+  const setLayerVisibility = useCallback((layerName, visible) => {
+    const entry = getLayerEntry(layerName);
+    if (!entry) return;
+    entry.visible = visible;
+    entry.layer.setOpacity(visible ? entry.opacity : 0);
+  }, [getLayerEntry]);
+
+  // Remove a layer (equivalente ao botão de lixeira do Aladin)
+  const removeLayer = useCallback((layerName) => {
+    aladinRef.current?.removeImageLayer(layerName);
+    delete imageLayersRef.current[layerName];
+  }, []);
+
+  // Aplica/substitui o overlay de mapa do survey; sempre torna o mapa visível.
   const setMapOverlay = useCallback((surveyKey, mapId, opacity = 0.8) => {
     if (!aladinRef.current) return;
     const hips_map = mapSurveysRef.current[surveyKey]?.[mapId];
     if (!hips_map) return;
     // Mesmo layer name => substitui o overlay anterior deste survey
-    const layer = aladinRef.current.setOverlayImageLayer(hips_map, `map-${surveyKey}`);
-    layer.setOpacity(opacity);
-    mapLayersRef.current[surveyKey] = { mapId, hips: layer, opacity, visible: true };
-  }, []);
+    applyLayer(`map-${surveyKey}`, hips_map, opacity);
+  }, [applyLayer]);
 
   const setMapOpacity = useCallback((surveyKey, opacity) => {
-    const layer = mapLayersRef.current[surveyKey];
-    if (!layer) return;
-    layer.opacity = opacity;
-    if (layer.visible) layer.hips.setOpacity(opacity);
-  }, []);
+    setLayerOpacity(`map-${surveyKey}`, opacity);
+  }, [setLayerOpacity]);
 
-  // Mostra/oculta o mapa sem perder banda nem opacidade (opacity 0 <-> valor guardado)
   const setMapVisibility = useCallback((surveyKey, visible) => {
-    const layer = mapLayersRef.current[surveyKey];
-    if (!layer) return;
-    layer.visible = visible;
-    layer.hips.setOpacity(visible ? layer.opacity : 0);
+    setLayerVisibility(`map-${surveyKey}`, visible);
+  }, [setLayerVisibility]);
+
+  const removeMapOverlay = useCallback((surveyKey) => {
+    removeLayer(`map-${surveyKey}`);
+  }, [removeLayer]);
+
+  // Adiciona o survey como camada. Com o id o Aladin cria uma HiPS nova a partir do hipsCache.
+  const addSurveyLayer = useCallback((surveyId, opacity = 1) => {
+    if (!aladinRef.current || !surveysRef.current[surveyId]) return;
+    applyLayer(`survey-${surveyId}`, surveyId, opacity);
+  }, [applyLayer]);
+
+  const centerOnSurvey = useCallback((surveyId) => {
+    const target = DEFAULT_TARGETS[surveyId];
+    if (target) aladinRef.current?.gotoObject(target);
   }, []);
 
-  // Remove a layer de mapa do survey (equivalente ao botão de lixeira do Aladin)
-  const removeMapOverlay = useCallback((surveyKey) => {
-    if (!aladinRef.current) return;
-    if (!mapLayersRef.current[surveyKey]) return;
-    aladinRef.current.removeImageLayer(`map-${surveyKey}`);
-    delete mapLayersRef.current[surveyKey];
+  const setSurveyLayerOpacity = useCallback((name, opacity) => {
+    setLayerOpacity(name, opacity);
+    syncSurveyLayers();
+  }, [setLayerOpacity, syncSurveyLayers]);
+
+  const setSurveyLayerVisibility = useCallback((name, visible) => {
+    setLayerVisibility(name, visible);
+    syncSurveyLayers();
+  }, [setLayerVisibility, syncSurveyLayers]);
+
+  const removeSurveyLayer = useCallback((name) => {
+    const stack = getSurveyStack();
+    // Sem camadas o Aladin carregaria o survey padrão dele
+    if (stack.length <= 1) return;
+
+    if (name !== 'base') {
+      removeLayer(name);
+      return;
+    }
+
+    // Removendo a base: a próxima camada assume o lugar dela, mantendo opacidade e visibilidade
+    const next = stack.find(item => item.name !== 'base');
+    const nextEntry = getLayerEntry(next.name);
+    applyLayer('base', next.layer.id, nextEntry.opacity, nextEntry.visible);
+    removeLayer(next.name);
+  }, [applyLayer, getLayerEntry, getSurveyStack, removeLayer]);
+
+  // Os catálogos já estão no Aladin, ocultos: adicionar ao painel é mostrar
+  const addCatalogLayer = useCallback((id) => {
+    const catalog = catalogsRef.current[id];
+    if (!catalog) return;
+    catalog.show();
+    setActiveCatalogIds(prev => prev.includes(id) ? prev : [...prev, id]);
+  }, []);
+
+  const removeCatalogLayer = useCallback((id) => {
+    catalogsRef.current[id]?.hide();
+    setActiveCatalogIds(prev => prev.filter(activeId => activeId !== id));
   }, []);
 
   const addMarker = useCallback((ra, dec, options = {}) => {
@@ -405,5 +606,16 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
     setMapOpacity,
     setMapVisibility,
     removeMapOverlay,
+    loadFailed,
+    retryLoad,
+    surveyLayers,
+    addSurveyLayer,
+    setSurveyLayerOpacity,
+    setSurveyLayerVisibility,
+    removeSurveyLayer,
+    centerOnSurvey,
+    activeCatalogIds,
+    addCatalogLayer,
+    removeCatalogLayer,
   };
 }
