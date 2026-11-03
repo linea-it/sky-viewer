@@ -14,6 +14,9 @@ const INITIAL_SURVEY_PRIORITY = [
   'RUBIN_FIRST_LOOK_UGRI',
 ];
 
+// Tempo sem nenhuma imagem até avisar que estão indisponíveis. Se a imagem ainda chegar, o aviso some.
+const INITIAL_LOAD_TIMEOUT_MS = 30000;
+
 /**
  * Hook para controlar o Aladin Lite, aguardando a lib A estar disponível.
  */
@@ -21,6 +24,9 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
   const containerRef = useRef(null);
   const aladinRef = useRef(null);
   const [isReady, setIsReady] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
+  // Incrementar recria o Aladin: é o "Try again" do aviso de indisponibilidade
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const surveysRef = useRef({})
   const catalogsRef = useRef({})
   const mapSurveysRef = useRef({}) // { [surveyKey]: { [mapId]: hips } } - surveys de mapa pré-registrados
@@ -214,6 +220,7 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
 
   useEffect(() => {
     let isCancelled = false;
+    let loadTimeout;
 
     if (!containerRef.current) return;
 
@@ -224,9 +231,17 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
       const aladin = A.aladin(containerRef.current, aladinParams);
       aladinRef.current = aladin;
 
+      // Cobre servidores que não respondem e não chegam a disparar o errorCallback
+      loadTimeout = setTimeout(() => setLoadFailed(true), INITIAL_LOAD_TIMEOUT_MS);
+
       const loadInitialSurvey = () => {
         const surveyId = INITIAL_SURVEY_PRIORITY.find(id => surveysRef.current[id]);
-        if (surveyId) applyLayer('base', surveyId, 1);
+        if (surveyId) {
+          applyLayer('base', surveyId, 1);
+        } else {
+          // Acabou a lista. O Aladin ainda tenta o DSS do CDS: se entrar, o backdrop fecha.
+          setLoadFailed(true);
+        }
       };
 
       // O Aladin tira do hipsCache o survey que falha, então ele também sai do select.
@@ -266,6 +281,8 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
             }
           }
           // Indica que o Aladin e a primeira imagem estão prontos
+          clearTimeout(loadTimeout);
+          setLoadFailed(false);
           setIsReady(true);
         }
         syncSurveyLayers();
@@ -369,6 +386,7 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
 
     return () => {
       isCancelled = true;
+      clearTimeout(loadTimeout);
       if (containerRef.current) {
         containerRef.current.innerHTML = '';
       }
@@ -379,8 +397,13 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
       setSurveyLayers([]);
       setActiveCatalogIds([]);
       setIsReady(false);
+      setLoadFailed(false);
     };
-  }, [aladinParams]);
+  }, [aladinParams, loadAttempt]);
+
+  const retryLoad = useCallback(() => {
+    setLoadAttempt(attempt => attempt + 1);
+  }, []);
 
   // Métodos utilitários
 
@@ -562,6 +585,8 @@ export function useAladin(aladinParams = {}, userGroups = [], baseHost, isDev) {
     setMapOpacity,
     setMapVisibility,
     removeMapOverlay,
+    loadFailed,
+    retryLoad,
     surveyLayers,
     addSurveyLayer,
     setSurveyLayerOpacity,
