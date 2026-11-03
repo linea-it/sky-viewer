@@ -7,7 +7,7 @@ import OpacitySlider from '@/components/Aladin/OpacitySlider';
 export default function SurveyLayerItem({ surveyLayer, removeDisabled, isTop }) {
   const { setSurveyLayerOpacity, setSurveyLayerVisibility, removeSurveyLayer, centerOnSurvey } = useAladinContext();
 
-  const [open, setOpen] = React.useState(true);
+  const [open, setOpen] = React.useState(false);
 
   return (
     <LayerListItem
