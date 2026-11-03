@@ -46,7 +46,8 @@ export default function Aladin({ userGroups = [], baseHost, isDev }) {
         </div>
         <div style={{
           width: '300px',
-          background: '#eee'
+          background: '#eee',
+          overflowY: 'auto'
         }}>
           <Controls />
         </div>
